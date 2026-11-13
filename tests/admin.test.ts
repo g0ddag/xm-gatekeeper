@@ -153,20 +153,20 @@ describe('authority', () => {
     enrol(h);
     await h.admin.settings(OWNER, OWNER, '');
     const panel = h.tg.messages.at(-1)!;
-    expect(panel.markup!.inline_keyboard.flat().some((b) => b.text === 'Attempts: 2')).toBe(true);
+    expect(panel.markup!.inline_keyboard.flat().some((b) => b.text === 'Picture attempt limit: 2 per 15 min')).toBe(true);
     const tap = async (label: RegExp, from: { markup?: { inline_keyboard: { text: string }[][] } }, actor = OWNER) => {
       const b = from.markup!.inline_keyboard.flat().find((x) => label.test(x.text))!;
       return h.admin.onAction(actor, OWNER, (b as unknown as { callback_data: string }).callback_data.slice(2), 42);
     };
-    await tap(/^Attempts/, panel);
+    await tap(/^Picture attempt limit/, panel);
     const options = h.tg.edits.at(-1)!;
     expect(options.messageId).toBe(42);
-    expect(options.markup!.inline_keyboard.flat().map((b) => b.text)).toEqual(['1', '✅ 2', '3', '← Back']);
+    expect(options.markup!.inline_keyboard.flat().map((b) => b.text)).toEqual(['1', '✅ 2', '3', 'Counting period: 15 min', '← Back']);
     expect(await tap(/^3$/, options, 7777)).toContain('no longer valid'); // someone else's tap does nothing
     expect(await tap(/^3$/, options)).toBe('Saved');
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).attempts).toBe(3);
     const back = h.tg.edits.at(-1)!;
-    expect(back.markup!.inline_keyboard.flat().some((b) => b.text === 'Attempts: 3')).toBe(true);
+    expect(back.markup!.inline_keyboard.flat().some((b) => b.text === 'Picture attempt limit: 3 per 15 min')).toBe(true);
     await tap(/^Mute & verify/, back);
     await tap(/^off$/, h.tg.edits.at(-1)!);
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).quarantine).toBe(false);
@@ -417,7 +417,7 @@ describe('settings authorization after opening a panel', () => {
     const manager = 3002;
     await addAdmin(h, manager);
     await h.admin.settings(manager, manager, '');
-    await press(h, manager, manager, /^Attempts/);
+    await press(h, manager, manager, /^Picture attempt limit/);
     h.tg.admins.set(GROUP, h.tg.admins.get(GROUP)!.filter(a => a.userId !== manager));
     await press(h, manager, manager, /^3$/);
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).attempts).toBe(2);
@@ -427,7 +427,7 @@ describe('settings authorization after opening a panel', () => {
   test('role lookup failure prevents settings writes even with a valid token', async () => {
     const h = harness(); enrol(h);
     await h.admin.settings(OWNER, OWNER, '');
-    await press(h, OWNER, OWNER, /^Attempts/);
+    await press(h, OWNER, OWNER, /^Picture attempt limit/);
     h.tg.failNext('getAdmins', new TgError('network', 'offline'));
     await press(h, OWNER, OWNER, /^3$/);
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).attempts).toBe(2);
@@ -437,7 +437,7 @@ describe('settings authorization after opening a panel', () => {
   test('expired settings tokens cannot apply changes', async () => {
     const h = harness(); enrol(h);
     await h.admin.settings(OWNER, OWNER, '');
-    await press(h, OWNER, OWNER, /^Attempts/);
+    await press(h, OWNER, OWNER, /^Picture attempt limit/);
     h.clock.advance(60 * 60_000);
     expect(await press(h, OWNER, OWNER, /^3$/)).toBe('This button is no longer valid.');
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).attempts).toBe(2);

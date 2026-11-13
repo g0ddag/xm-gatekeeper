@@ -27,13 +27,20 @@ export class GroupSettingsEditor {
   /** Main settings panel: one button per setting showing its current value. */
   private settingsPanel(userId: number, group: GroupRow): { text: string; rows: Button[][] } {
     const gid = group.chat_id;
-    const rows: Button[][] = SETTING_MENU.map((m) => [
-      this.button(userId, `${m.label}: ${this.settingValue(group, m.key)}${m.unit}`, { op: 'set', chat: gid, k: m.key }),
+    const settings = this.store.settingsOf(group);
+    const rows: Button[][] = SETTING_MENU.filter(m => m.key !== 'attemptWindowMin').map((m) => [
+      this.button(userId, m.key === 'attempts'
+        ? `Picture attempt limit: ${settings.attempts} per ${settings.attemptWindowMin} min`
+        : `${m.label}: ${this.settingValue(group, m.key)}${m.unit}`, { op: 'set', chat: gid, k: m.key }),
     ]);
     if (group.enabled) rows.push([this.button(userId, '⏸ Pause guard', { op: 'pause', chat: gid })]);
     const text = [
       `Settings for ${this.label(group)}`,
       `Guard: ${group.enabled ? 'ENABLED' : `OFF${group.paused_reason ? ` (${group.paused_reason})` : ''}: enable via /setup`} · Raid mode: ${group.raid_mode ? 'ON' : 'off'}`,
+      '',
+      'Stage time limits: Cap and the picture stage have separate deadlines. Retrying does not restart the picture timer.',
+      '',
+      `Picture attempt limit: ${settings.attempts} per ${settings.attemptWindowMin} min for each person in this group, including rejoining. This is a rate limit, not extra time to verify.`,
       '',
       'Tap a setting to change it.',
     ].join('\n');
@@ -52,8 +59,16 @@ export class GroupSettingsEditor {
     const rows: Button[][] = [];
     const perRow = m.perRow ?? 3;
     for (let i = 0; i < buttons.length; i += perRow) rows.push(buttons.slice(i, i + perRow));
+    if (key === 'attempts' || key === 'attemptWindowMin') {
+      const settings = this.store.settingsOf(group);
+      const other = key === 'attempts' ? 'attemptWindowMin' : 'attempts';
+      const label = key === 'attempts' ? `Counting period: ${settings.attemptWindowMin} min` : `Maximum picture attempts: ${settings.attempts}`;
+      rows.push([this.button(userId, label, { op: 'set', chat: gid, k: other })]);
+    }
     rows.push([this.button(userId, '← Back', { op: 'setm', chat: gid })]);
-    const hint = key === 'timezone' ? '\n\nAny other zone: /settings timezone Europe/Paris (IANA name).' : '';
+    const hint = key === 'attempts' || key === 'attemptWindowMin'
+      ? '\n\nCounts picture attempts by the same person in this group during the preceding period, including rejoining. It does not extend either stage deadline.'
+      : key === 'timezone' ? '\n\nAny other zone: /settings timezone Europe/Paris (IANA name).' : '';
     return { text: `${this.label(group)}\n${m.label}: ${current}${m.unit}\n\nChoose a new value:${hint}`, rows };
   }
 

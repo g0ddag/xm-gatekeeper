@@ -3,10 +3,10 @@ import { LANGUAGE_OPTIONS, type GroupSettings } from '@guard/core';
 /** Settings shown as buttons: label, unit and the values offered (all inside the system bounds). */
 export const SETTING_MENU: { key: keyof GroupSettings; label: string; unit: string; options: string[]; perRow?: number }[] = [
   { key: 'quarantine', label: 'Mute & verify new joiners', unit: '', options: ['on', 'off'] },
-  { key: 'challengeTimeoutSec', label: 'Time for picture stage', unit: ' s', options: ['60', '120', '180', '240', '300', '600'] },
-  { key: 'attempts', label: 'Attempts', unit: '', options: ['1', '2', '3'] },
-  { key: 'attemptWindowMin', label: 'Attempt window', unit: ' min', options: ['5', '15', '30', '60'] },
   { key: 'requestLifetimeMin', label: 'Time for Cap', unit: ' min', options: ['1', '5', '10', '15', '30', '60'] },
+  { key: 'challengeTimeoutSec', label: 'Time for picture stage', unit: ' s', options: ['60', '120', '180', '240', '300', '600'] },
+  { key: 'attempts', label: 'Maximum picture attempts', unit: '', options: ['1', '2', '3'] },
+  { key: 'attemptWindowMin', label: 'Attempt counting period', unit: ' min', options: ['5', '15', '30', '60'] },
   { key: 'helpLocale', label: 'Group message language', unit: '', options: LANGUAGE_OPTIONS.map(x => x.locale) },
   {
     key: 'timezone',
