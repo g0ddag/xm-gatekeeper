@@ -61,11 +61,11 @@ export class Admin {
   }
 
   /** Groups where the user currently holds authority (verified against Telegram, short cache). */
-  private async groupsFor(userId: number): Promise<{ group: GroupRow; role: Role }[]> {
+  private async groupsFor(userId: number, fresh = false): Promise<{ group: GroupRow; role: Role }[]> {
     const out: { group: GroupRow; role: Role }[] = [];
     for (const group of this.store.candidateGroupsFor(userId)) {
       try {
-        const role = await this.authority.role(group.chat_id, userId, false);
+        const role = await this.authority.role(group.chat_id, userId, fresh);
         if (role) out.push({ group, role });
       } catch (e) {
         log('warn', 'role_lookup_failed', { kind: classify(e).kind });
@@ -257,7 +257,14 @@ export class Admin {
       return false;
     };
     switch (p.op) {
+      case 'statuspage':
+        await this.status(userId, chatId, Number(p.page), messageId);
+        return;
+      case 'grouppage':
+        await this.pickGroup(userId, chatId, Number(p.page), messageId);
+        return;
       case 'ctx': {
+        if (!(await need('manager'))) return;
         this.store.setAdminContext(userId, groupId, now);
         const g = this.store.getGroup(groupId);
         await this.say(chatId, `Commands now apply to ${g ? this.label(g) : groupId}.`);
@@ -298,14 +305,10 @@ export class Admin {
           if (g) this.store.setRaid(groupId, g.raid_mode === 0, userId, 'status_button', now);
           toast = g?.raid_mode === 0 ? 'Raid mode started' : 'Raid mode ended';
         } else toast = 'Updated';
-        // Buttons are one-use, so the card is redrawn in place with fresh ones.
-        const group = await this.syncTitle(groupId);
-        if (group) {
-          const card = await this.reports.statusCard(userId, group);
-          const edited =
-            messageId !== undefined &&
-            (await this.tg.editMessage(chatId, messageId, card.text, { inline_keyboard: card.rows }, true).then(() => true, () => false));
-          if (!edited && p.to !== 'refresh') await this.say(chatId, card.text, card.rows, true);
+        // Keep pagination when a shortcut redraws the current status card.
+        if (messageId !== undefined || p.to !== 'refresh') {
+          const groups = (await this.groupsFor(userId, true)).sort((a, b) => a.group.chat_id - b.group.chat_id);
+          await this.status(userId, chatId, Math.max(0, groups.findIndex(g => g.group.chat_id === groupId)), messageId);
         }
         return toast;
       }
@@ -435,30 +438,49 @@ export class Admin {
     if (scope) await this.reports.audit(userId, chatId, scope.group);
   }
 
-  async status(userId: number, chatId: number): Promise<void> {
-    const groups = await this.groupsFor(userId);
-    let shown = 0;
-    for (const entry of groups.slice(0, 5)) {
-      const group = await this.syncTitle(entry.group.chat_id);
-      if (!group) continue;
-      const card = await this.reports.statusCard(userId, group);
-      await this.say(chatId, card.text, card.rows, true);
-      shown++;
-    }
-    if (shown === 0) await this.say(chatId, 'I do not know of a group you administer. Send /setup to set one up.');
+  private pageIndex(requested: number, pages: number): number {
+    return Math.max(0, Math.min(Number.isFinite(requested) ? Math.floor(requested) : 0, pages - 1));
   }
 
-  async pickGroup(userId: number, chatId: number): Promise<void> {
-    const groups = await this.groupsFor(userId);
-    if (groups.length === 0) {
-      await this.say(chatId, 'You do not administer any enrolled group.');
+  private pageButtons(userId: number, op: string, page: number, pages: number): Button[][] {
+    const row: Button[] = [];
+    if (page > 0) row.push(this.button(userId, '← Previous', { op, page: page - 1 }));
+    if (page + 1 < pages) row.push(this.button(userId, 'Next →', { op, page: page + 1 }));
+    return row.length ? [row] : [];
+  }
+
+  private async showPage(chatId: number, text: string, rows: Button[][], messageId?: number, rich = false): Promise<void> {
+    if (messageId !== undefined && await this.tg.editMessage(chatId, messageId, text, { inline_keyboard: rows }, rich).then(() => true, () => false)) return;
+    await this.say(chatId, text, rows, rich);
+  }
+
+  async status(userId: number, chatId: number, requestedPage = 0, messageId?: number): Promise<void> {
+    const groups = (await this.groupsFor(userId, true)).sort((a, b) => a.group.chat_id - b.group.chat_id);
+    if (!groups.length) {
+      await this.showPage(chatId, 'I do not know of a group you administer. Send /setup to set one up.', [], messageId);
       return;
     }
-    await this.say(
-      chatId,
-      'Choose the group that admin commands apply to:',
-      groups.slice(0, 10).map((g) => [this.button(userId, `${this.label(g.group)} (${g.role})`, { op: 'ctx', chat: g.group.chat_id })]),
-    );
+    const page = this.pageIndex(requestedPage, groups.length);
+    const group = await this.syncTitle(groups[page]!.group.chat_id);
+    if (!group) { await this.showPage(chatId, 'This group is no longer available. Send /status to refresh.', [], messageId); return; }
+    const card = await this.reports.statusCard(userId, group);
+    await this.showPage(chatId, `Group ${page + 1} of ${groups.length}\n\n${card.text}`,
+      [...card.rows, ...this.pageButtons(userId, 'statuspage', page, groups.length)], messageId, true);
+  }
+
+  async pickGroup(userId: number, chatId: number, requestedPage = 0, messageId?: number): Promise<void> {
+    const groups = (await this.groupsFor(userId, true)).sort((a, b) => a.group.chat_id - b.group.chat_id);
+    if (!groups.length) {
+      await this.showPage(chatId, 'You do not administer any enrolled group.', [], messageId);
+      return;
+    }
+    const pages = Math.ceil(groups.length / 10);
+    const page = this.pageIndex(requestedPage, pages);
+    const rows = groups.slice(page * 10, (page + 1) * 10).map(g => [
+      this.button(userId, `${this.label(g.group)} (${g.role})`, { op: 'ctx', chat: g.group.chat_id }),
+    ]);
+    await this.showPage(chatId, `Choose the group that admin commands apply to:\nPage ${page + 1} of ${pages} · ${groups.length} groups`,
+      [...rows, ...this.pageButtons(userId, 'grouppage', page, pages)], messageId);
   }
 
   /**

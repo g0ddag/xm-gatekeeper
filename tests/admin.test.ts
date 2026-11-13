@@ -443,3 +443,40 @@ describe('settings authorization after opening a panel', () => {
     expect(h.store.settingsOf(h.store.getGroup(GROUP)!).attempts).toBe(2);
   });
 });
+
+
+describe('admin pagination', () => {
+  test('group picker reaches later groups and rejects other users and revoked admins', async () => {
+    const h = harness();
+    for (let i = 0; i < 12; i++) enrol(h, -2000 - i);
+    await h.admin.pickGroup(OWNER, OWNER);
+    const first = h.tg.messages.at(-1)!;
+    expect(first.text).toContain('Page 1 of 2');
+    const next = first.markup!.inline_keyboard.flat().find(b => b.text === 'Next →')!;
+    const token = (next as { callback_data: string }).callback_data.slice(2);
+    expect(await h.admin.onAction(7777, OWNER, token, 42)).toContain('no longer valid');
+    await h.admin.onAction(OWNER, OWNER, token, 42);
+    const last = h.tg.edits.at(-1)!;
+    expect(last.messageId).toBe(42);
+    expect(last.text).toContain('Page 2 of 2');
+    expect(last.markup!.inline_keyboard.flat().some(b => b.text === 'Next →')).toBe(false);
+    const previous = last.markup!.inline_keyboard.flat().find(b => b.text === '← Previous')!;
+    for (const admins of h.tg.admins.values()) admins.splice(0, 1);
+    await h.admin.onAction(OWNER, OWNER, (previous as { callback_data: string }).callback_data.slice(2), 42);
+    expect(h.tg.edits.at(-1)!.text).toContain('You do not administer');
+  });
+
+  test('status paginates in place and clamps a page after groups disappear', async () => {
+    const h = harness();
+    for (let i = 0; i < 7; i++) enrol(h, -3000 - i);
+    await h.admin.status(OWNER, OWNER, 99);
+    expect(h.tg.messages.at(-1)!.text).toContain('Group 7 of 7');
+    const last = h.tg.messages.at(-1)!;
+    const previous = last.markup!.inline_keyboard.flat().find(b => b.text === '← Previous')!;
+    await h.admin.onAction(OWNER, OWNER, (previous as { callback_data: string }).callback_data.slice(2), 42);
+    expect(h.tg.edits.at(-1)!.text).toContain('Group 6 of 7');
+    for (const [id, admins] of h.tg.admins) if (id !== -3000) admins.splice(0, 1);
+    await h.admin.status(OWNER, OWNER, 5, 42);
+    expect(h.tg.edits.at(-1)!.text).toContain('Group 1 of 1');
+  });
+});
