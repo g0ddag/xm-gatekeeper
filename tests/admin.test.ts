@@ -185,6 +185,20 @@ describe('authority', () => {
 });
 
 describe('setup', () => {
+  test('first contact discovers an admin before enrolment and retries a failed menu update', async () => {
+    const h = harness();
+    h.store.upsertKnownChat(GROUP, 'Agents', 'supergroup', 'administrator', h.clock.now());
+    h.tg.admins.set(GROUP, [{ userId: OWNER, isCreator: true, isBot: false, canInvite: true, canRestrict: true }]);
+    let attempts = 0;
+    h.tg.setAdminMenu = async () => { if (++attempts === 1) throw new Error('temporary failure'); };
+    expect(h.store.getGroup(GROUP)).toBeUndefined();
+    expect(await h.admin.isAdmin(OWNER)).toBe(true);
+    expect(await h.admin.isAdmin(OWNER)).toBe(true);
+    expect(attempts).toBe(2);
+    expect(await h.admin.isAdmin(7777)).toBe(false);
+    expect(attempts).toBe(2);
+  });
+
   test('any group admin sets up and enables without anyone approving it', async () => {
     const h = harness();
     const G = -1003003;

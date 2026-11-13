@@ -74,6 +74,7 @@ export function registerRoutes(bot: Bot, s: Services): void {
     let text = `${t(locale, s.store.requireCap ? 'help.cap' : 'help.text')}\n\n${t(locale, 'help.notice')}`;
     text += '\n\n/whoami: my user ID and data centre';
     if (await admin.isAdmin(userId)) text += `\n\n${admin.helpText()}`;
+    else text += '\n\nGroup administrator? Add me to your group as an administrator, then send /setup here.';
     await v.say(chatId, text);
   };
 

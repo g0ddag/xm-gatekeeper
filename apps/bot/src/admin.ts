@@ -54,6 +54,12 @@ export class Admin {
     return this.store.settingsOf(g).label || String(g.chat_id);
   }
 
+  private async ensureAdminMenu(userId: number): Promise<void> {
+    if (this.menuShown.has(userId)) return;
+    this.menuShown.add(userId);
+    await this.tg.setAdminMenu(userId).catch(() => this.menuShown.delete(userId));
+  }
+
   /** Groups where the user currently holds authority (verified against Telegram, short cache). */
   private async groupsFor(userId: number): Promise<{ group: GroupRow; role: Role }[]> {
     const out: { group: GroupRow; role: Role }[] = [];
@@ -65,11 +71,7 @@ export class Admin {
         log('warn', 'role_lookup_failed', { kind: classify(e).kind });
       }
     }
-    // Admins get the admin command menu in their own chat with the bot; nobody else sees it.
-    if (out.length > 0 && !this.menuShown.has(userId)) {
-      this.menuShown.add(userId);
-      await this.tg.setAdminMenu(userId).catch(() => this.menuShown.delete(userId));
-    }
+    if (out.length > 0) await this.ensureAdminMenu(userId);
     return out;
   }
 
@@ -128,13 +130,23 @@ export class Admin {
   }
   /** True for a current administrator of at least one guarded group (also gives them the admin menu). */
   async isAdmin(userId: number): Promise<boolean> {
-    return (await this.groupsFor(userId)).length > 0;
+    if ((await this.groupsFor(userId)).length > 0) return true;
+    // Discover administrators before enrolment, when first opening the bot.
+    for (const chat of this.store.listKnownChats(25)) {
+      try {
+        if (roleOf(await this.authority.admins(chat.chat_id, false), userId) !== null) {
+          await this.ensureAdminMenu(userId);
+          return true;
+        }
+      } catch { /* An inaccessible group must not block onboarding. */ }
+    }
+    return false;
   }
 
   // ---------- /setup ----------
   async setupFromGroup(chatId: number, title: string, type: string): Promise<void> {
     this.store.upsertKnownChat(chatId, title, type, 'administrator', this.clock.now());
-    await this.say(chatId, `Setup continues in a private chat: https://t.me/${this.tg.username}: the group owner should send /setup there.`);
+    await this.say(chatId, `Setup continues in a private chat: https://t.me/${this.tg.username}: a group administrator should send /setup there.`);
   }
 
   async setup(userId: number, chatId: number): Promise<void> {
@@ -164,6 +176,7 @@ export class Admin {
       );
       return;
     }
+    await this.ensureAdminMenu(userId);
     await this.say(chatId, 'Choose the group to set up:', rows);
   }
 
@@ -210,7 +223,7 @@ export class Admin {
       '',
       'How it works once enabled:',
       botCanRestrict
-        ? this.store.requireCap ? '• New members are muted, complete Cap in a private Mini App, then answer one easy three-choice picture in the group to be unmuted.' : '• Anyone who joins the group by any link is muted at once and gets a picture check right in the group. Two correct taps and they are unmuted. They never need to open a chat with me.'
+        ? this.store.requireCap ? '• New members are muted, tap Verify in their welcome message, complete Cap in the Mini App, then answer one six-choice picture question in the group to be unmuted.' : '• Anyone who joins the group by any link is muted at once and gets a picture check right in the group. Answer the picture challenge to be unmuted. They never need to open a chat with me.'
         : '• ➖ Without the "Ban users" right I cannot mute people who join directly; only join requests are verified.',
       botCanInvite
         ? '• Join requests (groups or links with "Approve new members") are verified before the person gets in.'
@@ -267,7 +280,9 @@ export class Admin {
           return;
         }
         this.store.setEnabled(groupId, true, userId, 'owner_enabled', now);
-        await this.say(chatId, '✅ Guard enabled. New members are now verified automatically. Use /review for the manual queue and /raid in an emergency.');
+        await this.ensureAdminMenu(userId);
+        await this.say(chatId, '✅ Guard enabled. New members are now verified automatically. Test with a second account. Use /settings to change the rules, /review for people needing help, and /status to manage your groups.');
+        await this.status(userId, chatId);
         return;
       }
       case 'st': {

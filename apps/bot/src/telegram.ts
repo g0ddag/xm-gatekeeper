@@ -108,6 +108,7 @@ export const GROUP_ADMIN_MENU = [
   {command:'setup',description:'Set up the guard (owner)'},
 ];
 export const USER_MENU = [
+  { command: 'setup', description: 'Set up a group (administrators)' },
   { command: 'help', description: 'What this bot does' },
   { command: 'whoami', description: 'My user ID and data centre' },
 ];
