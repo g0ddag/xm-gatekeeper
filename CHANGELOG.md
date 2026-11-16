@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.1.0-alpha.2
+
 Add per-group risk control. Administrators manage keywords with `/keywords`;
 matching group messages and edits are deleted, and senders are warned and muted for
 one hour, then 24 hours, then banned on the third strike within 30 days. Requires the
@@ -15,6 +17,11 @@ removed. Automatic decisions use the persistent outbox and are recorded in audit
 Automatically remove group review notices after one minute with persistent retries.
 Existing tracked review notices are scheduled once on upgrade. Verification and
 administrator review decisions are unchanged.
+
+Paginate group selection and the status view, re-checking each administrator's
+authority on every page. Clarify that picture attempt limits are a rate limit,
+separate from the Cap and picture stage deadlines. Improve setup and onboarding
+guidance for administrators.
 
 ## 0.1.0-alpha.1
 

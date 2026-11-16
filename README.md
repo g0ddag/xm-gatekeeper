@@ -12,7 +12,7 @@ XM Gatekeeper runs as a single Bun process backed by SQLite: no Redis, PostgreSQ
 external CAPTCHA service is required.
 
 > [!WARNING]
-> **Alpha release (v0.1.0-alpha.1).** Interfaces, configuration and the database
+> **Alpha release (v0.1.0-alpha.2).** Interfaces, configuration and the database
 > schema may change before 1.0. Evaluate the bot with a dedicated test bot and group
 > before deploying it to a live community.
 
