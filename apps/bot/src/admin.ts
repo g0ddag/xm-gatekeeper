@@ -5,6 +5,7 @@ export { parseDuration, type Moderation } from './admin/moderation';
 import { Authority, roleOf } from './admin/authority';
 export { Authority, roleOf } from './admin/authority';
 import { GroupSettingsEditor } from './admin/group-settings';
+import { KeywordEditor } from './admin/keywords';
 import { ACTION_TTL_MS, CONFIRM_TTL_MS, type AdminPresentation } from './admin/presentation';
 import type { UserTarget } from './targets';
 import {
@@ -33,12 +34,14 @@ export class Admin {
       label: group => this.label(group),
     };
     this.reports = new AdminReports(store, tg, authority, presentation, clock);
+    this.keywordEditor = new KeywordEditor(store, tg, authority, clock, presentation);
     this.groupSettings = new GroupSettingsEditor(store, tg, clock, presentation);
     this.moderation = new ModerationService(store, tg, authority, verification, clock,
       (userId, chatId, min) => this.scope(userId, chatId, min), presentation);
   }
 
   private readonly groupSettings: GroupSettingsEditor;
+  private readonly keywordEditor: KeywordEditor;
   private readonly moderation: ModerationService;
   private readonly reports: AdminReports;
 
@@ -117,6 +120,7 @@ export class Admin {
       '',
       '/setup: set up the guard for your group and switch it on',
       '/settings: change the rules (tap buttons)',
+      '/keywords: risk-control keywords; group messages containing them are deleted',
       '/review: people waiting for a decision: approve, decline or let them try again',
       '/raid on|off: stop automatic approvals during a spam wave',
       '/ban <@username|user_id>: ban someone (in the group: reply to their message with /ban)',
@@ -200,6 +204,7 @@ export class Admin {
       `${isOwner ? '✅' : '❌'} You are an administrator of the group (with "Ban users" or "Invite users")`,
       `${botCanRestrict ? '✅' : botCanInvite ? '➖' : '❌'} I have the "Ban users" admin right (mute newcomers until verified)`,
       `${botCanInvite ? '✅' : botCanRestrict ? '➖' : '❌'} I have the "Invite users via link" admin right (handle join requests)`,
+      `${me?.canDelete ? '✅' : '➖'} I have the "Delete messages" admin right (risk control: delete messages containing /keywords)`,
     ];
     if (chat.type !== 'supergroup' || !isOwner || (!botCanInvite && !botCanRestrict)) {
       await this.say(chatId, [`Setup checklist for ${chat.title}:`, ...checks, '', 'Fix the ❌ items, then run /setup again.'].join('\n'));
@@ -312,6 +317,14 @@ export class Admin {
         }
         return toast;
       }
+      case 'kw':
+      case 'kwdel':
+      case 'kwtog': {
+        if (!(await need('manager'))) return;
+        const group = this.store.getGroup(groupId);
+        if (!group) return 'This button is no longer valid.';
+        return this.keywordEditor.onAction(userId, chatId, p, group, messageId);
+      }
       case 'setm':
       case 'set':
       case 'setv': {
@@ -413,6 +426,12 @@ export class Admin {
     if (!scope) return;
     if (!args.trim()) scope.group = (await this.syncTitle(scope.group.chat_id)) ?? scope.group;
     await this.groupSettings.settings(userId, chatId, scope, args);
+  }
+
+  /** /keywords — risk-control keyword list for the selected group (private chat only). */
+  async keywords(userId: number, chatId: number, args: string): Promise<void> {
+    const scope = await this.scope(userId, chatId, 'manager');
+    if (scope) await this.keywordEditor.command(userId, chatId, scope.group, args);
   }
 
   moderateInGroup(actorId: number, groupId: number, target: UserTarget | undefined, action: Moderation): Promise<void> {

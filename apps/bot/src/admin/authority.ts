@@ -41,8 +41,8 @@ export class Authority {
     if (creator && creator.userId !== group.owner_user_id) this.store.setOwner(chatId, creator.userId, this.clock.now());
     return roleOf(admins, userId);
   }
-  async botRights(chatId: number): Promise<{ invite: boolean; restrict: boolean }> {
+  async botRights(chatId: number): Promise<{ invite: boolean; restrict: boolean; delete: boolean }> {
     const me = (await this.admins(chatId, true)).find((a) => a.userId === this.tg.botId);
-    return { invite: me?.canInvite === true, restrict: me?.canRestrict === true };
+    return { invite: me?.canInvite === true, restrict: me?.canRestrict === true, delete: me?.canDelete === true };
   }
 }

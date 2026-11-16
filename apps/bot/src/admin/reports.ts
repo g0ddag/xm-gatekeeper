@@ -32,7 +32,14 @@ const AUDIT_LABELS: Record<string, string> = {
   settings_changed: 'setting',
   group_enrolled: 'set up',
   owner_changed: 'owner changed',
+  risk_deleted: '🛡 risk control deleted a message',
+  risk_muted: '🛡 risk control muted',
+  risk_banned: '🛡 risk control banned (3rd strike)',
+  keyword_added: 'keyword added',
+  keyword_removed: 'keyword removed',
 };
+/** Events whose reason field is a risk-control keyword, shown to admins next to the event. */
+const KEYWORD_EVENTS = new Set(['risk_deleted', 'risk_muted', 'risk_banned', 'keyword_added', 'keyword_removed']);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -65,7 +72,7 @@ function ago(ms: number): string {
 /** Read-only reporting after Admin has established the caller's group scope. */
 export class AdminReports {
   constructor(
-    private readonly store: Pick<Store, 'listAudit' | 'settingsOf' | 'countByState' | 'reviewQueue'>,
+    private readonly store: Pick<Store, 'listAudit' | 'settingsOf' | 'countByState' | 'reviewQueue' | 'countRiskKeywords'>,
     private readonly tg: Pick<Tg, 'memberName'>,
     private readonly authority: Pick<Authority, 'botRights'>,
     private readonly ui: AdminPresentation,
@@ -102,7 +109,7 @@ export class AdminReports {
     const zone = this.store.settingsOf(group).timezone;
     const stamp = (ms: number) => formatTime(ms, zone);
     const lines = rows.map((r) => {
-      const event = esc(AUDIT_LABELS[r.action] ?? r.action.replace(/_/g, ' '));
+      const event = esc(AUDIT_LABELS[r.action] ?? r.action.replace(/_/g, ' ')) + (KEYWORD_EVENTS.has(r.action) ? ` “${esc(r.reason_code)}”` : '');
       const subject = r.subject_user_id ?? r.actor_user_id;
       const by = r.subject_user_id !== null && r.actor_user_id !== null && r.actor_user_id !== r.subject_user_id;
       return `<code>${stamp(r.created_at)}</code> ${event}${subject !== null ? ` · ${name(subject)}` : ''}${by ? ` · by ${name(r.actor_user_id!)}` : ''}${subject !== null ? `\nUser ID: <code>${subject}</code>` : ''}${by ? ` · Admin ID: <code>${r.actor_user_id!}</code>` : ''}`;
@@ -117,10 +124,15 @@ export class AdminReports {
     const light = (ok: boolean) => (ok ? '🟢' : '🔴');
     let mute = '⚪ unknown';
     let requests = '⚪ unknown';
+    let deletes = '⚪ unknown';
+    const settings = this.store.settingsOf(group);
+    const keywordCount = this.store.countRiskKeywords(gid);
     try {
       const r = await this.authority.botRights(gid);
       mute = r.restrict ? '🟢 ready' : '🔴 missing “Ban users” right';
       requests = r.invite ? '🟢 ready' : '⚪ not enabled';
+      const needsDelete = settings.riskControl && keywordCount > 0;
+      deletes = r.delete ? '🟢 ready' : needsDelete ? '🔴 missing “Delete messages” right' : '⚪ not granted';
     } catch {
       // Telegram could not be reached; the card still shows what is stored.
     }
@@ -136,6 +148,9 @@ export class AdminReports {
       '<b>Bot rights</b>',
       `Mute new joiners: ${mute}`,
       `Join requests: ${requests}`,
+      `Delete risky messages: ${deletes}`,
+      '',
+      `🛡 <b>Risk control:</b> ${settings.riskControl ? 'on' : 'off'} · ${keywordCount} keyword${keywordCount === 1 ? '' : 's'}`,
       '',
       '<b>Members checked</b>',
       `⏳ In progress: <b>${(c.pending ?? 0) + (c.challenging ?? 0)}</b>`,

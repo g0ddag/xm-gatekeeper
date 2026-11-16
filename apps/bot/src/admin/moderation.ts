@@ -23,7 +23,7 @@ export function parseDuration(text: string): { seconds: number; label: string } 
   return { seconds, label: `${n} ${unit === 'm' ? 'min' : unit === 'h' ? 'h' : 'd'}` };
 }
 
-type ModerationStore = Pick<Store, 'getGroup' | 'userIdForUsername' | 'rememberUsername' | 'liveRequest' | 'recordBan' | 'audit' | 'queueDecision'>;
+type ModerationStore = Pick<Store, 'getGroup' | 'userIdForUsername' | 'rememberUsername' | 'liveRequest' | 'recordBan' | 'audit' | 'queueDecision' | 'clearRiskStrikes'>;
 type ScopeResolver = (userId: number, chatId: number, min: Role) => Promise<{ group: GroupRow; role: Role } | undefined>;
 
 /** Group/private moderation shares one execution policy and fresh Telegram authority checks. */
@@ -130,6 +130,7 @@ export class ModerationService {
           await this.tg.unban(groupId, targetId); // lift a ban first, so they can come back
           await this.tg.unrestrict(groupId, targetId).catch(() => undefined); // then any mute; fails harmlessly if they are not in the group
         }
+        this.store.clearRiskStrikes(groupId, targetId); // a fresh start for risk control too
         this.store.audit(groupId, actorId, targetId, 'user_unbanned', 'admin_command', now);
         await this.say(replyChat, `✅ ${who} is no longer muted or banned.`, undefined, true);
       }

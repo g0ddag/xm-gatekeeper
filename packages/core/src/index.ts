@@ -107,6 +107,8 @@ export interface GroupSettings {
   approvalsPerMinute: number;
   auditRetentionDays: number;
   quarantine: boolean;
+  /** Delete group messages containing one of the group's risk-control keywords. */
+  riskControl: boolean;
 }
 export const DEFAULT_SETTINGS: GroupSettings = {
   label: '',
@@ -121,6 +123,7 @@ export const DEFAULT_SETTINGS: GroupSettings = {
   approvalsPerMinute: 10,
   auditRetentionDays: 30,
   quarantine: true,
+  riskControl: true,
 };
 /** System bounds: a group manager cannot disable limits or extend storage indefinitely. */
 export const SETTING_BOUNDS = {
@@ -159,6 +162,7 @@ export function parseSettings(json: string): GroupSettings {
     out[key] = v;
   }
   if (typeof r.quarantine === 'boolean') out.quarantine = r.quarantine;
+  if (typeof r.riskControl === 'boolean') out.riskControl = r.riskControl;
   return out;
 }
 
@@ -183,6 +187,10 @@ export function applySetting(current: GroupSettings, key: string, value: string)
   if (key === 'helpLocale') {
     if (!isLocale(value)) return { ok: false, error: `helpLocale must be one of ${LOCALES.join(', ')}` };
     return { ok: true, settings: { ...current, helpLocale: value } };
+  }
+  if (key === 'riskControl') {
+    if (value !== 'on' && value !== 'off') return { ok: false, error: 'riskControl must be on or off' };
+    return { ok: true, settings: { ...current, riskControl: value === 'on' } };
   }
   if (key === 'quarantine') {
     if (value !== 'on' && value !== 'off') return { ok: false, error: 'quarantine must be on or off' };
@@ -294,3 +302,68 @@ export function errorCode(e: unknown): string {
   if (e instanceof Error) return redact(`${e.name}: ${e.message}`).slice(0, 200);
   return 'unknown';
 }
+
+// ---------- Risk-control keywords ----------
+export const RISK_KEYWORD_MAX_LENGTH = 64;
+export const RISK_KEYWORDS_PER_GROUP = 200;
+
+/**
+ * Canonical form used for both stored keywords and scanned messages: Unicode NFKC (folds
+ * full-width and stylised letters), lower case, zero-width characters removed, whitespace
+ * collapsed. Keyword matching is a case-insensitive substring test on this form.
+ */
+export function normalizeForMatch(text: string): string {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\u200b-\u200f\u2060-\u2064\ufeff\u00ad]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+/** Letters and digits only: catches "b u y  n o w" and "buy.now" written to slip past a filter. */
+function compact(text: string): string {
+  return text.replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+/** Parses a keyword typed by an admin. Undefined when empty or too long after normalisation. */
+export function parseRiskKeyword(raw: string): string | undefined {
+  const k = normalizeForMatch(raw);
+  if (!k || k.length > RISK_KEYWORD_MAX_LENGTH) return undefined;
+  return k;
+}
+
+/** Splits "/keywords add a, b，c、d" style lists: commas (any width), 、, semicolons and new lines. */
+export function splitKeywordList(raw: string): string[] {
+  return raw.split(/[,，、;；\n]+/).map((x) => x.trim()).filter(Boolean);
+}
+
+/**
+ * The first keyword found in the text, or undefined. A keyword matches as a substring of the
+ * normalised text, or of the text with spaces and punctuation removed (when the keyword itself
+ * has at least two letters or digits).
+ */
+export function matchRiskKeyword(text: string, keywords: readonly string[]): string | undefined {
+  if (!text || keywords.length === 0) return undefined;
+  const norm = normalizeForMatch(text);
+  const squashed = compact(norm);
+  for (const k of keywords) {
+    if (norm.includes(k)) return k;
+    const ck = compact(k);
+    if (ck.length >= 2 && squashed.includes(ck)) return k;
+  }
+  return undefined;
+}
+
+/**
+ * Risk-control strikes, counted per person per group. Strikes 1 and 2 warn and mute; strike 3
+ * bans (removes from the group). A strike is forgotten after STRIKE_MEMORY_MS without a new one,
+ * and messages within STRIKE_GRACE_MS of the last strike are deleted without adding another, so
+ * a burst sent before the mute took effect counts once.
+ */
+export const RISK_STRIKES = [
+  { muteSec: 3600, label: '1 hour' },
+  { muteSec: 86_400, label: '24 hours' },
+] as const;
+export const RISK_BAN_AT = 3;
+export const STRIKE_MEMORY_MS = 30 * 86_400_000;
+export const STRIKE_GRACE_MS = 60_000;

@@ -4,3 +4,4 @@ export * from './routes';
 export * from './telegram';
 export * from './verification';
 export * from './webhook';
+export * from './risk-control';

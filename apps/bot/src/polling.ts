@@ -7,7 +7,23 @@ import type { InboxRepository, UsernameDirectory } from '@guard/database';
 import { classify } from './telegram';
 
 const MAX_INBOX_BACKLOG = 1000;
-export const ALLOWED_UPDATES = ['message', 'callback_query', 'chat_join_request', 'chat_member', 'my_chat_member'] as const;
+export const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query', 'chat_join_request', 'chat_member', 'my_chat_member'] as const;
+
+/** Returns the matched keyword when a group message must be removed by risk control. */
+export type RiskCheck = (chatId: number, text: string) => string | undefined;
+
+type ScannedMessage = {
+  text?: string | undefined;
+  caption?: string | undefined;
+  entities?: { type: string; url?: string }[] | undefined;
+  caption_entities?: { type: string; url?: string }[] | undefined;
+  poll?: { question: string } | undefined;
+};
+/** Everything a reader sees in a message, including the targets of hidden text links. */
+function scannedText(m: ScannedMessage): string {
+  const links = [...(m.entities ?? []), ...(m.caption_entities ?? [])].flatMap((e) => (e.type === 'text_link' && e.url ? [e.url] : []));
+  return [m.text, m.caption, m.poll?.question, ...links].filter(Boolean).join('\n');
+}
 
 type Loose = Record<string, unknown>;
 const user = (u: { id: number; is_bot: boolean }) => ({ id: u.id, is_bot: u.is_bot, first_name: '' });
@@ -20,9 +36,19 @@ const chat = (c: { id: number; type: string; title?: string | undefined }) => ({
 /**
  * Keeps only the fields the application uses. Biographies, names, contacts, free text,
  * media and invite links never reach the inbox. Returns null for updates that need no handling.
+ *
+ * Group messages are checked against risk-control keywords here, in memory. A hit is stored only
+ * as `_risk` (the keyword) with the message ID and sender; the message text itself is discarded.
  */
-export function projectUpdate(u: Update): Loose | null {
+export function projectUpdate(u: Update, risk?: RiskCheck): Loose | null {
   const base = { update_id: u.update_id };
+  const riskHit = (m: NonNullable<Update['message']>): Loose | null => {
+    if (!risk || !m.from || m.from.is_bot || (m.chat.type !== 'group' && m.chat.type !== 'supergroup')) return null;
+    const keyword = risk(m.chat.id, scannedText(m));
+    if (keyword === undefined) return null;
+    return { ...base, message: { message_id: m.message_id, date: m.date, chat: chat(m.chat), from: user(m.from), _risk: keyword } };
+  };
+  if (u.edited_message) return riskHit(u.edited_message); // edits matter only when they add a keyword
   if (u.chat_join_request) {
     const r = u.chat_join_request;
     return {
@@ -76,6 +102,8 @@ export function projectUpdate(u: Update): Loose | null {
     const out: Loose = { message_id: m.message_id, date: m.date, chat: chat(m.chat), from: user(m.from) };
     if (m.migrate_to_chat_id !== undefined) return { ...base, message: { ...out, migrate_to_chat_id: m.migrate_to_chat_id } };
     if (m.new_chat_title !== undefined) return { ...base, message: { ...out, new_chat_title: m.new_chat_title.slice(0, 128) } };
+    const hit = riskHit(m);
+    if (hit) return hit;
     const command = m.entities?.find((e) => e.type === 'bot_command' && e.offset === 0);
     if (m.text && command) {
       // Commands keep their text (bounded); nothing else a user types is stored.
@@ -102,6 +130,7 @@ export class Poller {
     private readonly bot: Bot,
     private readonly store: InboxRepository & UsernameDirectory,
     private readonly clock: Clock,
+    private readonly risk?: RiskCheck,
   ) {
     this.inbox = new InboxProcessor(store, clock, update => bot.handleUpdate(update));
   }
@@ -153,7 +182,7 @@ export class Poller {
       }
     }
     this.store.storeBatchAndAdvance(
-      updates.map((u) => ({ update_id: u.update_id, payload: projectUpdate(u) })),
+      updates.map((u) => ({ update_id: u.update_id, payload: projectUpdate(u, this.risk) })),
       this.clock.now(),
     );
   }

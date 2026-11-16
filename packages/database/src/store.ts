@@ -18,11 +18,15 @@ export type { InboxRow, OutboxRow } from './queue-repositories';
 import { SqliteRuntimeState } from './runtime-state';
 import { SqliteUsernameDirectory } from './username-directory';
 import { SqlitePhotoCache } from './photo-cache';
+import { SqliteRiskKeywords } from './risk-keywords';
 import type { GroupRow, UsernameDirectory, PhotoCacheRepository } from './repositories';
 export type { GroupRow } from './repositories';
 import type { Database } from 'bun:sqlite';
 import {
   POLICY,
+  RISK_KEYWORDS_PER_GROUP,
+  STRIKE_GRACE_MS,
+  STRIKE_MEMORY_MS,
   LIVE_REQUEST_STATES,
   parseSettings,
   tokenHash,
@@ -130,6 +134,7 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
     this.outbox = new SqliteOutbox(db, rng);
     this.usernames = new SqliteUsernameDirectory(db, this.runtimeState);
     this.photoCache = new SqlitePhotoCache(db);
+    this.riskKeywords = new SqliteRiskKeywords(db);
   }
 
   private readonly groups: SqliteGroups;
@@ -145,6 +150,56 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
   private readonly runtimeState: SqliteRuntimeState;
   private readonly usernames: SqliteUsernameDirectory;
   private readonly photoCache: SqlitePhotoCache;
+  private readonly riskKeywords: SqliteRiskKeywords;
+
+  // ---------- Risk-control keywords ----------
+  listRiskKeywords(chatId: number): string[] {
+    return this.riskKeywords.list(chatId);
+  }
+  countRiskKeywords(chatId: number): number {
+    return this.riskKeywords.count(chatId);
+  }
+  /** Adds normalised keywords up to the per-group cap. Returns those actually added. */
+  addRiskKeywords(chatId: number, keywords: string[], actor: number, now: number): { added: string[]; full: boolean } {
+    return this.tx(() => {
+      const added: string[] = [];
+      let full = false;
+      for (const k of keywords) {
+        if (this.riskKeywords.count(chatId) >= RISK_KEYWORDS_PER_GROUP) { full = true; break; }
+        if (this.riskKeywords.add(chatId, k, actor, now)) {
+          added.push(k);
+          this.audit(chatId, actor, null, 'keyword_added', k, now);
+        }
+      }
+      return { added, full };
+    });
+  }
+  removeRiskKeyword(chatId: number, keyword: string, actor: number, now: number): boolean {
+    return this.tx(() => {
+      const removed = this.riskKeywords.remove(chatId, keyword);
+      if (removed) this.audit(chatId, actor, null, 'keyword_removed', keyword, now);
+      return removed;
+    });
+  }
+  recordRiskStrike(chatId: number, userId: number, now: number): { count: number; counted: boolean } {
+    return this.tx(() => this.riskKeywords.strike(chatId, userId, now, STRIKE_MEMORY_MS, STRIKE_GRACE_MS));
+  }
+  clearRiskStrikes(chatId: number, userId: number): void {
+    this.riskKeywords.clearStrikes(chatId, userId);
+  }
+  /** Keywords to scan a group message against: empty unless the guard is on with risk control enabled. */
+  activeRiskKeywords(chatId: number): string[] {
+    const group = this.getGroup(chatId);
+    if (!group || !group.enabled) return [];
+    let settings: GroupSettings;
+    try {
+      settings = this.settingsOf(group);
+    } catch {
+      return [];
+    }
+    return settings.riskControl ? this.riskKeywords.list(chatId) : [];
+  }
+
 
   scheduleReviewNotice(chatId: number, messageId: number, dueAt: number): void {
     this.setState(`review_notice:${chatId}:${messageId}`, JSON.stringify({chatId, messageId, dueAt}));
@@ -349,6 +404,7 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
   }
   removeGroup(chatId: number, actor: number, now: number): void {
     this.tx(() => {
+      this.riskKeywords.removeGroup(chatId);
       this.groups.remove(chatId);
       this.run('DELETE FROM attempts WHERE chat_id=?', chatId);
       this.preferences.clearGroupContext(chatId);

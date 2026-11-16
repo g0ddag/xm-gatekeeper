@@ -26,6 +26,7 @@ external CAPTCHA service is required.
 - [Set up with an AI agent](#set-up-with-an-ai-agent)
 - [Configuration](#configuration)
 - [Commands](#commands)
+- [Risk control](#risk-control)
 - [Project structure](#project-structure)
 - [Development](#development)
 - [Security](#security)
@@ -61,6 +62,8 @@ Maintainers can regenerate them using the **Documentation screenshots** workflow
   and resume after a restart.
 - **Administrator tooling.** Guided setup, manual review, audit log, raid controls,
   and moderation by reply, `@username` or numeric ID.
+- **Risk control.** Per-group keywords: matching messages are deleted and senders
+  escalate from warning and mute to a ban on the third strike.
 - **Localisation.** Verification messages in English, Traditional Chinese and
   Simplified Chinese. Administrator interfaces are in English.
 
@@ -104,7 +107,7 @@ question is ready, although some Telegram clients may still require a manual tap
 | [Bun](https://bun.sh) 1.4.4 | The tested version.                              |
 | Linux or macOS   | Any platform supported by [Sharp](https://sharp.pixelplumbing.com/). Linux is recommended for production. |
 | Telegram bot     | A token from [@BotFather](https://t.me/BotFather).          |
-| Telegram supergroup | The bot needs **Ban users** and **Invite users via link** rights. |
+| Telegram supergroup | The bot needs **Ban users** and **Invite users via link** rights, plus **Delete messages** for risk control. |
 | HTTPS hostname   | Optional. Required for webhooks and the Cap Mini App.       |
 
 ## Quick start
@@ -149,6 +152,7 @@ bun start
 **5. Enrol a group**
 
 1. Add the bot to a supergroup with **Ban users** and **Invite users via link** rights.
+   Add **Delete messages** too if you will use risk control.
 2. As a group administrator, send `/setup` to the bot in a private chat and follow
    the checklist to enrol and enable the group.
 3. Using a second account, test both a direct join and a join request.
@@ -296,6 +300,7 @@ Send administrator commands to the bot in a private chat. `/ban`, `/mute` and
 | `/status`   | Show the group's verification status.                  |
 | `/review`   | Review pending and failed verifications.               |
 | `/settings` | Change verification settings.                          |
+| `/keywords` | Manage risk-control keywords and switch risk control.   |
 | `/raid`     | `on` or `off`. In raid mode, new requests go to review. |
 | `/audit`    | Show recent administrative and verification events.    |
 | `/ban`      | Ban a user.                                            |
@@ -309,6 +314,36 @@ group.
 Moderation commands accept a reply, a numeric user ID or an `@username`. Username
 lookup only resolves users the bot has already observed; it is not a Telegram-wide
 search.
+
+## Risk control
+
+Administrators keep a keyword list per group with `/keywords` in a private chat:
+`/keywords add word1, word2` (commas, `、`, `;` or new lines separate keywords; up to
+200 per group, 64 characters each) and `/keywords remove word`, or tap a keyword in
+the panel to remove it. The panel also switches risk control on or off; it is on by
+default but does nothing until a keyword is added.
+
+When a member's message, caption, poll question, hidden link target or edit contains
+a keyword, the bot deletes it and escalates per person and group:
+
+| Strike | Action                                    |
+| ------ | ----------------------------------------- |
+| 1st    | Delete, warn, mute for one hour.          |
+| 2nd    | Delete, warn, mute for 24 hours.          |
+| 3rd    | Delete and ban (removed from the group).  |
+
+Each strike posts a short notice in the group's language that mentions the sender
+and deletes itself after one minute. Strikes are forgotten after 30 days without a
+new one, and `/unban` resets them. Messages within one minute of a strike are deleted
+without adding another, so a burst counts once. Group administrators are exempt.
+
+Matching is a case-insensitive substring test after Unicode NFKC normalisation, with
+zero-width characters removed; it also matches letters separated by spaces or
+punctuation. Short Latin keywords can match inside longer words, so prefer specific
+phrases. Messages are checked in memory as they arrive; only a hit (message ID,
+sender and keyword) is stored. Existing messages are not rescanned, and posts sent
+as a channel are not checked. Without **Delete messages** or **Ban users**,
+administrators receive one warning per hour.
 
 ## Project structure
 

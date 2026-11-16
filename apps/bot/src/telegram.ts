@@ -15,6 +15,8 @@ export interface AdminInfo {
   isBot: boolean;
   canInvite: boolean;
   canRestrict: boolean;
+  /** Optional so older fakes and callers stay valid; undefined means unknown/no. */
+  canDelete?: boolean;
 }
 export interface SentPhoto {
   messageId: number;
@@ -90,6 +92,7 @@ export const ADMIN_MENU = [
   { command: 'status', description: 'Your groups at a glance' },
   { command: 'review', description: 'People waiting for a decision' },
   { command: 'settings', description: 'Change the rules' },
+  { command: 'keywords', description: 'Risk-control keywords' },
   { command: 'raid', description: 'Raid mode on / off' },
   { command: 'audit', description: 'Recent actions' },
   { command: 'ban', description: 'Ban by reply, @username or ID' },
@@ -301,6 +304,7 @@ export class GrammyTg implements Tg {
       isBot: a.user.is_bot,
       canInvite: a.status === 'creator' || a.can_invite_users === true,
       canRestrict: a.status === 'creator' || a.can_restrict_members === true,
+      canDelete: a.status === 'creator' || a.can_delete_messages === true,
     }));
   }
   async isMember(chatId: number, userId: number): Promise<boolean> {

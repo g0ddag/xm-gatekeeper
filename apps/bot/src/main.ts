@@ -15,6 +15,8 @@ import { registerRoutes } from './routes';
 import { GrammyTg, telegramSignal } from './telegram';
 import { synchronizeMenus } from './menu-sync';
 import { Verification } from './verification';
+import { RiskControl } from './risk-control';
+import { matchRiskKeyword } from '@guard/core';
 
 async function main(): Promise<void> {
   const config = loadConfig(process.env);
@@ -46,11 +48,14 @@ async function main(): Promise<void> {
     const clock = systemClock;
     const startedAt = clock.now();
     const verification = new Verification({ store, tg, assets, boards: new PreparedBoardProvider(bank), config, clock, rng: secureRng });
-    const poller = new Poller(bot, store, clock);
-    const admin = new Admin(store, tg, new Authority(tg, store, clock), verification, clock, () => ({
+    // Group messages are checked in memory at intake; only a keyword hit is ever stored.
+    const poller = new Poller(bot, store, clock, (chatId, text) => matchRiskKeyword(text, store.activeRiskKeywords(chatId)));
+    const authority = new Authority(tg, store, clock);
+    const risk = new RiskControl(store, tg, authority, clock, (chatId, text) => verification.notifyAdmins(chatId, text));
+    const admin = new Admin(store, tg, authority, verification, clock, () => ({
       lastPollAt: poller.lastPollAt, startedAt, mode: config.webhook ? 'webhook' : 'polling',
     }));
-    registerRoutes(bot, { verification, admin, store, assets, tg, clock });
+    registerRoutes(bot, { verification, admin, store, assets, tg, clock, risk });
     store.recoverCapPictures(clock.now());
     store.scheduleExistingReviewNotices(clock.now());
 

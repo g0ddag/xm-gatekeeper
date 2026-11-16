@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Add per-group risk control. Administrators manage keywords with `/keywords`;
+matching group messages and edits are deleted, and senders are warned and muted for
+one hour, then 24 hours, then banned on the third strike within 30 days. Requires the
+**Delete messages** right. Keywords and strikes use existing storage; no schema change.
+
 Automatically remove members or reject join requests after delivered checks time
 out or exhaust wrong-answer attempts. Keep help requests, raid mode and detected
 service problems in manual review. Existing review records are not retroactively

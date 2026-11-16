@@ -7,8 +7,10 @@ import { parseDuration, type Admin, type Moderation } from './admin';
 import { commandTarget } from './targets';
 import { dcFromFileId, esc, userLink, type Tg } from './telegram';
 import type { Verification } from './verification';
+import type { RiskControl } from './risk-control';
 
 export interface Services {
+  risk?: RiskControl;
   verification: Verification;
   admin: Admin;
   store: Store;
@@ -23,6 +25,13 @@ const MEMBER = new Set(['member', 'administrator', 'creator']);
 export function registerRoutes(bot: Bot, s: Services): void {
   const { verification: v, admin } = s;
   const isPrivate = (ctx: Context) => ctx.chat?.type === 'private';
+
+  // Risk control first: intake marked this group message (or edit) as matching a keyword.
+  bot.on('message', async (ctx, next) => {
+    const keyword = (ctx.message as { _risk?: unknown })._risk;
+    if (typeof keyword !== 'string') return next();
+    if (ctx.from) await s.risk?.onHit(ctx.chat.id, ctx.from.id, ctx.message.message_id, keyword);
+  });
 
   bot.on('chat_join_request', async (ctx) => {
     const req = ctx.chatJoinRequest;
@@ -130,6 +139,7 @@ export function registerRoutes(bot: Bot, s: Services): void {
   adminCommand('review', (u, c) => admin.review(u, c));
   adminCommand('raid', (u, c, a) => admin.raid(u, c, a.toLowerCase()));
   adminCommand('settings', (u, c, a) => admin.settings(u, c, a));
+  adminCommand('keywords', (u, c, a) => admin.keywords(u, c, a));
   adminCommand('audit', (u, c) => admin.audit(u, c));
   adminCommand('status', (u, c) => admin.status(u, c));
   adminCommand('group', (u, c) => admin.pickGroup(u, c));
