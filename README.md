@@ -1,6 +1,6 @@
 # XM Gatekeeper
 
-[![CI](https://github.com/haruseed/xm-gatekeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/haruseed/xm-gatekeeper/actions/workflows/ci.yml)
+[![CI](https://github.com/g0ddag/xm-gatekeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/g0ddag/xm-gatekeeper/actions/workflows/ci.yml)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 ![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)
 ![Bun 1.4.4](https://img.shields.io/badge/bun-1.4.4-black.svg)
@@ -115,7 +115,7 @@ question is ready, although some Telegram clients may still require a manual tap
 **1. Install and build the demo assets**
 
 ```sh
-git clone https://github.com/haruseed/xm-gatekeeper.git
+git clone https://github.com/g0ddag/xm-gatekeeper.git
 cd xm-gatekeeper
 bun install --frozen-lockfile
 bun run assets:build
@@ -174,7 +174,7 @@ not in the prompt, a public issue or a committed file.
 
 ```text
 Help me install and configure XM Gatekeeper from:
-https://github.com/haruseed/xm-gatekeeper
+https://github.com/g0ddag/xm-gatekeeper
 
 My setup:
 - Target machine or SSH alias: <local machine or SSH alias>
