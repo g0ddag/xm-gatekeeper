@@ -121,6 +121,7 @@ export class Admin {
       '/setup: set up the guard for your group and switch it on',
       '/settings: change the rules (tap buttons)',
       '/keywords: risk-control keywords; group messages containing them are deleted',
+      '/bannames: name ban list; people whose name contains one are banned at once',
       '/review: people waiting for a decision: approve, decline or let them try again',
       '/raid on|off: stop automatic approvals during a spam wave',
       '/ban <@username|user_id>: ban someone (in the group: reply to their message with /ban)',
@@ -319,7 +320,14 @@ export class Admin {
       }
       case 'kw':
       case 'kwdel':
-      case 'kwtog': {
+      case 'kwtog':
+      case 'nk':
+      case 'nkdel':
+      case 'nktog':
+      case 'kwadd':
+      case 'kwcancel':
+      case 'nkadd':
+      case 'nkcancel': {
         if (!(await need('manager'))) return;
         const group = this.store.getGroup(groupId);
         if (!group) return 'This button is no longer valid.';
@@ -432,6 +440,29 @@ export class Admin {
   async keywords(userId: number, chatId: number, args: string): Promise<void> {
     const scope = await this.scope(userId, chatId, 'manager');
     if (scope) await this.keywordEditor.command(userId, chatId, scope.group, args);
+  }
+  /**
+   * The admin's plain private message after tapping ➕ Add in a keyword panel. False when no add
+   * was waiting, so the message is handled as usual. Authority is re-checked now.
+   */
+  keywordInput(userId: number, chatId: number, text: string): Promise<boolean> {
+    return this.keywordEditor.takeInput(userId, chatId, text, async (groupId) => {
+      try {
+        if (!roleAtLeast(await this.authority.role(groupId, userId, true), 'manager')) {
+          await this.say(chatId, 'You no longer have the required role for this action.');
+          return undefined;
+        }
+      } catch {
+        await this.say(chatId, 'I could not verify your current role with Telegram, so nothing was changed.');
+        return undefined;
+      }
+      return this.store.getGroup(groupId) ?? undefined;
+    });
+  }
+  /** /bannames — name-ban keyword list for the selected group (private chat only). */
+  async banNames(userId: number, chatId: number, args: string): Promise<void> {
+    const scope = await this.scope(userId, chatId, 'manager');
+    if (scope) await this.keywordEditor.command(userId, chatId, scope.group, args, 'name');
   }
 
   moderateInGroup(actorId: number, groupId: number, target: UserTarget | undefined, action: Moderation): Promise<void> {

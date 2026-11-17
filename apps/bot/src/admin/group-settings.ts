@@ -4,7 +4,7 @@ import type { Button, Tg } from '../telegram';
 import { SETTING_MENU } from './settings-menu';
 import { CONFIRM_TTL_MS, type AdminPresentation } from './presentation';
 
-type SettingsStore = Pick<Store, 'settingsOf' | 'getGroup' | 'updateSettings' | 'countRiskKeywords'>;
+type SettingsStore = Pick<Store, 'settingsOf' | 'getGroup' | 'updateSettings' | 'countRiskKeywords' | 'countNameKeywords'>;
 
 /** Editing/presentation only. Admin authenticates scope and consumes tokens before delegation. */
 export class GroupSettingsEditor {
@@ -34,6 +34,7 @@ export class GroupSettingsEditor {
         : `${m.label}: ${this.settingValue(group, m.key)}${m.unit}`, { op: 'set', chat: gid, k: m.key }),
     ]);
     rows.push([this.button(userId, `🛡 Risk-control keywords: ${settings.riskControl ? 'on' : 'off'}, ${this.store.countRiskKeywords(gid)}`, { op: 'kw', chat: gid })]);
+    rows.push([this.button(userId, `🚫 Name ban list: ${settings.riskControl ? 'on' : 'off'}, ${this.store.countNameKeywords(gid)}`, { op: 'nk', chat: gid })]);
     if (group.enabled) rows.push([this.button(userId, '⏸ Pause guard', { op: 'pause', chat: gid })]);
     const text = [
       `Settings for ${this.label(group)}`,

@@ -93,6 +93,7 @@ export const ADMIN_MENU = [
   { command: 'review', description: 'People waiting for a decision' },
   { command: 'settings', description: 'Change the rules' },
   { command: 'keywords', description: 'Risk-control keywords' },
+  { command: 'bannames', description: 'Ban on sight by name' },
   { command: 'raid', description: 'Raid mode on / off' },
   { command: 'audit', description: 'Recent actions' },
   { command: 'ban', description: 'Ban by reply, @username or ID' },

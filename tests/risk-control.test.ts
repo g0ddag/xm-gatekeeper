@@ -4,6 +4,7 @@ import type { Update } from 'grammy/types';
 import { matchRiskKeyword, normalizeForMatch, parseRiskKeyword, splitKeywordList, RISK_KEYWORDS_PER_GROUP } from '@guard/core';
 import { LocalAssetStore } from '@guard/assets';
 import { Poller, RISK_NOTICE_TTL_MS, RiskControl, TgError, projectUpdate, registerRoutes } from '@guard/bot';
+import { pendingKeywordInput } from '../apps/bot/src/admin/keywords';
 import { ASSETS_DIR, BOT_ID, GROUP, OWNER, enrol, harness, type Harness } from './helpers';
 
 const U = 5001;
@@ -224,7 +225,7 @@ describe('/keywords', () => {
     expect(h.tg.messages.some((m) => m.chatId === MOD && m.text.startsWith('Added 3'))).toBe(true);
     await h.admin.keywords(MOD, MOD, 'add free usdt');
     expect(h.tg.messages.some((m) => m.chatId === MOD && m.text.includes('Already in the list: free usdt'))).toBe(true);
-    expect(buttons(h, MOD).map((b) => b.text)).toEqual(['⏸ Turn risk control off', '❌ free usdt', '❌ 加微信', '❌ t.me/joinchat', '⚙️ Other settings']);
+    expect(buttons(h, MOD).map((b) => b.text)).toEqual(['➕ Add keywords', '⏸ Turn risk control off', '❌ free usdt', '❌ 加微信', '❌ t.me/joinchat', '🚫 Name ban list', '⚙️ Other settings']);
     expect(await tap(h, MOD, /❌ 加微信/)).toBe('Removed: 加微信');
     expect(h.store.listRiskKeywords(GROUP)).toEqual(['free usdt', 't.me/joinchat']);
     await h.admin.keywords(MOD, MOD, 'remove FREE USDT');
@@ -275,9 +276,206 @@ describe('/keywords', () => {
     h.store.addRiskKeywords(GROUP, ['a1', 'b2'], OWNER, h.clock.now());
     await h.admin.settings(OWNER, OWNER, '');
     expect(buttons(h, OWNER).some((b) => b.text === '🛡 Risk-control keywords: on, 2')).toBe(true);
+    expect(buttons(h, OWNER).some((b) => b.text === '🚫 Name ban list: on, 0')).toBe(true);
     await h.admin.status(OWNER, OWNER);
     const card = h.tg.messages.filter((m) => m.chatId === OWNER).at(-1)!.text;
-    expect(card).toContain('🛡 <b>Risk control:</b> on · 2 keywords');
+    expect(card).toContain('🛡 <b>Risk control:</b> on · 2 keywords · 0 name bans');
     expect(card).toContain('Delete risky messages: 🔴 missing “Delete messages” right');
+  });
+});
+
+describe('quoted messages', () => {
+  test('the quote block of a reply, and a quote from another chat, are checked', () => {
+    const { h } = setup();
+    h.store.addRiskKeywords(GROUP, ['scam.example'], OWNER, h.clock.now());
+    const r = check(h);
+    const quoted = projectUpdate(groupMessage(60, U, { text: 'see this', quote: { text: 'visit scam.example now', position: 0 } }), r) as { message: { _risk: string } };
+    expect(quoted.message._risk).toBe('scam.example');
+    const external = projectUpdate(groupMessage(61, U, {
+      text: 'ok', external_reply: { origin: { type: 'channel', date: 1, chat: { id: -100, type: 'channel', title: 'C' }, message_id: 1 }, chat: { id: -100, type: 'channel', title: 'C' } },
+      quote: { text: 'scam.example giveaway', position: 0 },
+    }), r);
+    expect(external).not.toBeNull();
+    expect(projectUpdate(groupMessage(62, U, { text: 'ok', external_reply: { origin: { type: 'hidden_user', date: 1, sender_user_name: 'x' }, poll: { question: 'go to scam.example?' } } }), r)).not.toBeNull();
+    expect(projectUpdate(groupMessage(63, U, { text: 'fine', quote: { text: 'also fine', position: 0 } }), r)).toBeNull();
+    expect(JSON.stringify(quoted)).not.toContain('visit');
+  });
+});
+
+describe('name ban list', () => {
+  const names = (h: Harness) => (chatId: number, name: string) => matchRiskKeyword(name, h.store.activeNameKeywords(chatId));
+  const spamName = { first_name: '莪这有路*子', username: 'road_x' };
+  const joinRequest = (id: number, from: Record<string, unknown>): Update => ({
+    update_id: id,
+    chat_join_request: { chat: { id: GROUP, type: 'supergroup', title: 'G' }, from: { id: U, is_bot: false, ...from }, user_chat_id: U, date: 1 },
+  }) as unknown as Update;
+  const memberJoin = (id: number, from: Record<string, unknown>): Update => ({
+    update_id: id,
+    chat_member: {
+      chat: { id: GROUP, type: 'supergroup', title: 'G' },
+      from: { id: U, is_bot: false, first_name: 'x' },
+      date: 1,
+      old_chat_member: { status: 'left', user: { id: U, is_bot: false, ...from } },
+      new_chat_member: { status: 'member', user: { id: U, is_bot: false, ...from } },
+    },
+  }) as unknown as Update;
+  const pipeline = (h: Harness, risk: RiskControl) => {
+    const bot = new Bot('1:test', {
+      botInfo: { id: BOT_ID, is_bot: true, first_name: 'G', username: 'guard_test_bot', can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false } as never,
+    });
+    bot.api.config.use(async () => ({ ok: true, result: true }) as never);
+    registerRoutes(bot, { verification: h.v, admin: h.admin, store: h.store, assets: new LocalAssetStore(ASSETS_DIR), tg: h.tg, clock: h.clock, risk });
+    return new Poller(bot, h.store, h.clock, check(h), names(h));
+  };
+  const requests = (h: Harness) => (h.store.db.query('SELECT COUNT(*) AS n FROM join_requests').get() as { n: number }).n;
+
+  test('an obfuscated name is matched; the name itself never reaches the inbox', () => {
+    const { h } = setup();
+    h.store.addKeywords('name', GROUP, ['有路子'], OWNER, h.clock.now());
+    const hit = projectUpdate(joinRequest(1, spamName), undefined, names(h)) as { chat_join_request: { _nameban: string } };
+    expect(hit.chat_join_request._nameban).toBe('有路子');
+    expect(JSON.stringify(hit)).not.toContain('莪');
+    expect(JSON.stringify(hit)).not.toContain('road_x');
+    const ok = projectUpdate(joinRequest(2, { first_name: 'Agent Smith' }), undefined, names(h)) as { chat_join_request: object };
+    expect(ok.chat_join_request).not.toHaveProperty('_nameban');
+    // @username is checked too
+    h.store.addKeywords('name', GROUP, ['road_x'], OWNER, h.clock.now());
+    expect((projectUpdate(joinRequest(3, { first_name: 'Nice', username: 'Road_X' }), undefined, names(h)) as { chat_join_request: { _nameban: string } }).chat_join_request._nameban).toBe('road_x');
+  });
+
+  test('a join request is declined and the person banned, without starting verification', async () => {
+    const { h, risk } = setup();
+    h.store.addKeywords('name', GROUP, ['有路子'], OWNER, h.clock.now());
+    const poller = pipeline(h, risk);
+    await poller.accept([joinRequest(10, spamName)]);
+    await poller.processInbox();
+    expect(h.tg.declined).toEqual([[GROUP, U]]);
+    expect(h.tg.banned).toEqual([[GROUP, U]]);
+    expect(requests(h)).toBe(0);
+    expect(h.store.listAudit(GROUP, 5).some((a) => a.action === 'name_banned' && a.reason_code === '有路子')).toBe(true);
+  });
+
+  test('someone who joins by invite link is banned at once, with no picture check and no group notice', async () => {
+    const { h, risk } = setup();
+    h.store.addKeywords('name', GROUP, ['这有路'], OWNER, h.clock.now());
+    const poller = pipeline(h, risk);
+    await poller.accept([memberJoin(20, spamName)]);
+    await poller.processInbox();
+    expect(h.tg.banned).toEqual([[GROUP, U]]);
+    expect(requests(h)).toBe(0);
+    expect(h.tg.prompts).toHaveLength(0);
+  });
+
+  test('a member whose name matches is banned when they post; their message and the join notice are deleted once', async () => {
+    const { h, risk } = setup();
+    h.store.addKeywords('name', GROUP, ['有路子'], OWNER, h.clock.now());
+    const poller = pipeline(h, risk);
+    await poller.accept([
+      groupMessage(30, U, { from: { id: U, is_bot: false, ...spamName }, new_chat_members: [{ id: U, is_bot: false, ...spamName }] }),
+      groupMessage(31, U, { from: { id: U, is_bot: false, ...spamName }, text: 'hello' }),
+    ]);
+    await poller.processInbox();
+    expect(h.tg.banned).toEqual([[GROUP, U]]);
+    expect(h.tg.deleted).toEqual([730, 731]);
+    expect(h.store.listAudit(GROUP, 5).filter((a) => a.action === 'name_banned')).toHaveLength(1);
+  });
+
+  test('administrators are exempt, and nothing happens with risk control off', async () => {
+    const { h, risk } = setup();
+    expect(await risk.onNameHit(GROUP, MOD, '有路子', { kind: 'member' })).toBe(false);
+    const off = setup({ riskControl: false });
+    off.h.store.addKeywords('name', GROUP, ['有路子'], OWNER, off.h.clock.now());
+    expect(projectUpdate(joinRequest(40, spamName), undefined, names(off.h)) as object).not.toHaveProperty('chat_join_request._nameban');
+    expect(await off.risk.onNameHit(GROUP, U, '有路子', { kind: 'request' })).toBe(false);
+    expect([...h.tg.banned, ...off.h.tg.banned]).toEqual([]);
+  });
+
+  test('without the Ban users right the normal flow continues and admins are told', async () => {
+    const { h, risk } = setup();
+    h.tg.ban = async () => {
+      throw new TgError('bad_request', 'Bad Request: not enough rights to restrict/unrestrict chat member');
+    };
+    expect(await risk.onNameHit(GROUP, U, '有路子', { kind: 'member' })).toBe(false);
+    expect(h.tg.messages.filter((m) => m.chatId === OWNER && m.text.includes('/bannames'))).toHaveLength(1);
+  });
+
+  test('/bannames adds and removes; the list is separate from message keywords and lives in runtime_state', async () => {
+    const { h } = setup();
+    await h.admin.banNames(MOD, MOD, 'add 有路子, 加V');
+    expect(h.store.listKeywords('name', GROUP)).toEqual(['有路子', '加v']);
+    expect(h.store.listRiskKeywords(GROUP)).toEqual([]);
+    const panel = h.tg.messages.filter((m) => m.chatId === MOD && m.markup).at(-1)!;
+    expect(panel.text).toContain('Name ban list');
+    expect(panel.markup!.inline_keyboard.flat().map((b) => b.text)).toEqual(['➕ Add keywords', '⏸ Turn risk control off', '❌ 有路子', '❌ 加v', '🛡 Message keywords', '⚙️ Other settings']);
+    await h.admin.banNames(MOD, MOD, 'remove 加V');
+    expect(h.store.listKeywords('name', GROUP)).toEqual(['有路子']);
+    const rows = h.store.db.query("SELECT key FROM runtime_state WHERE key LIKE 'name_keyword:%'").all() as { key: string }[];
+    expect(rows.map((r) => r.key)).toEqual([`name_keyword:${GROUP}:有路子`]);
+    const actions = h.store.listAudit(GROUP, 20).map((a) => `${a.action}:${a.reason_code}`);
+    expect(actions).toContain('name_keyword_added:有路子');
+    expect(actions).toContain('name_keyword_removed:加v');
+    h.store.removeGroup(GROUP, OWNER, h.clock.now());
+    expect(h.store.listKeywords('name', GROUP)).toEqual([]);
+  });
+});
+
+describe('adding keywords with buttons', () => {
+  const privateText = (id: number, from: number, text: string): Update => ({
+    update_id: id,
+    message: { message_id: 900 + id, date: 1, chat: { id: from, type: 'private', first_name: 'A' }, from: { id: from, is_bot: false, first_name: 'A' }, text },
+  }) as unknown as Update;
+  const tapLatest = (h: Harness, actor: number, label: RegExp) => {
+    const b = [...h.tg.edits, ...h.tg.messages].filter((m) => m.markup).flatMap((m) => m.markup!.inline_keyboard.flat()).reverse().find((x) => label.test(x.text))!;
+    return h.admin.onAction(actor, actor, (b as { callback_data: string }).callback_data.slice(2), 77);
+  };
+  const pipeline = (h: Harness) => {
+    const bot = new Bot('1:test', {
+      botInfo: { id: BOT_ID, is_bot: true, first_name: 'G', username: 'guard_test_bot', can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false } as never,
+    });
+    bot.api.config.use(async () => ({ ok: true, result: true }) as never);
+    registerRoutes(bot, { verification: h.v, admin: h.admin, store: h.store, assets: new LocalAssetStore(ASSETS_DIR), tg: h.tg, clock: h.clock });
+    return new Poller(bot, h.store, h.clock, undefined, undefined, (userId) => pendingKeywordInput(h.store, userId, h.clock.now()) !== undefined);
+  };
+
+  test('tap ➕ Add, then send the list as a plain message: new lines and commas separate keywords', async () => {
+    const { h } = setup();
+    const poller = pipeline(h);
+    await h.admin.banNames(MOD, MOD, '');
+    expect(await tapLatest(h, MOD, /➕ Add keywords/)).toBe('Send the keywords as a message');
+    expect(h.tg.messages.at(-1)!.text).toContain('Send the name keywords');
+    await poller.accept([privateText(1, MOD, '有路子\n加V，代理')]);
+    await poller.processInbox();
+    expect(h.store.listKeywords('name', GROUP)).toEqual(['有路子', '加v', '代理']);
+    expect(h.store.listRiskKeywords(GROUP)).toEqual([]);
+    // The wait is over: the next plain message is not kept or added.
+    await poller.accept([privateText(2, MOD, 'another')]);
+    await poller.processInbox();
+    expect(h.store.listKeywords('name', GROUP)).toHaveLength(3);
+    expect(JSON.stringify(h.store.db.query('SELECT * FROM inbox').all())).not.toContain('another');
+  });
+
+  test('plain private text is still discarded unless that admin is adding; the wait expires and can be cancelled', async () => {
+    const { h } = setup();
+    const poller = pipeline(h);
+    await poller.accept([privateText(10, U, 'my secret')]);
+    expect(JSON.stringify(h.store.db.query('SELECT * FROM inbox').all())).not.toContain('secret');
+    await h.admin.keywords(MOD, MOD, '');
+    await tapLatest(h, MOD, /➕ Add keywords/);
+    h.clock.advance(11 * 60_000);
+    await poller.accept([privateText(11, MOD, 'late')]);
+    await poller.processInbox();
+    expect(h.store.listRiskKeywords(GROUP)).toEqual([]);
+    await h.admin.keywords(MOD, MOD, '');
+    await tapLatest(h, MOD, /➕ Add keywords/);
+    expect(await tapLatest(h, MOD, /Cancel/)).toBe('Cancelled');
+    await poller.accept([privateText(12, MOD, 'spam')]);
+    await poller.processInbox();
+    expect(h.store.listRiskKeywords(GROUP)).toEqual([]);
+  });
+
+  test('typed lists keep new lines as separators', async () => {
+    const { h } = setup();
+    await h.admin.keywords(MOD, MOD, 'add one\ntwo words\nthree');
+    expect(h.store.listRiskKeywords(GROUP)).toEqual(['one', 'two words', 'three']);
   });
 });

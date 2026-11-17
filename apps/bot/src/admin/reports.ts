@@ -37,9 +37,12 @@ const AUDIT_LABELS: Record<string, string> = {
   risk_banned: '🛡 risk control banned (3rd strike)',
   keyword_added: 'keyword added',
   keyword_removed: 'keyword removed',
+  name_banned: '🚫 banned by name',
+  name_keyword_added: 'name ban keyword added',
+  name_keyword_removed: 'name ban keyword removed',
 };
 /** Events whose reason field is a risk-control keyword, shown to admins next to the event. */
-const KEYWORD_EVENTS = new Set(['risk_deleted', 'risk_muted', 'risk_banned', 'keyword_added', 'keyword_removed']);
+const KEYWORD_EVENTS = new Set(['risk_deleted', 'risk_muted', 'risk_banned', 'keyword_added', 'keyword_removed', 'name_banned', 'name_keyword_added', 'name_keyword_removed']);
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
@@ -72,7 +75,7 @@ function ago(ms: number): string {
 /** Read-only reporting after Admin has established the caller's group scope. */
 export class AdminReports {
   constructor(
-    private readonly store: Pick<Store, 'listAudit' | 'settingsOf' | 'countByState' | 'reviewQueue' | 'countRiskKeywords'>,
+    private readonly store: Pick<Store, 'listAudit' | 'settingsOf' | 'countByState' | 'reviewQueue' | 'countRiskKeywords' | 'countNameKeywords'>,
     private readonly tg: Pick<Tg, 'memberName'>,
     private readonly authority: Pick<Authority, 'botRights'>,
     private readonly ui: AdminPresentation,
@@ -127,6 +130,7 @@ export class AdminReports {
     let deletes = '⚪ unknown';
     const settings = this.store.settingsOf(group);
     const keywordCount = this.store.countRiskKeywords(gid);
+    const nameCount = this.store.countNameKeywords(gid);
     try {
       const r = await this.authority.botRights(gid);
       mute = r.restrict ? '🟢 ready' : '🔴 missing “Ban users” right';
@@ -150,7 +154,7 @@ export class AdminReports {
       `Join requests: ${requests}`,
       `Delete risky messages: ${deletes}`,
       '',
-      `🛡 <b>Risk control:</b> ${settings.riskControl ? 'on' : 'off'} · ${keywordCount} keyword${keywordCount === 1 ? '' : 's'}`,
+      `🛡 <b>Risk control:</b> ${settings.riskControl ? 'on' : 'off'} · ${keywordCount} keyword${keywordCount === 1 ? '' : 's'} · ${nameCount} name ban${nameCount === 1 ? '' : 's'}`,
       '',
       '<b>Members checked</b>',
       `⏳ In progress: <b>${(c.pending ?? 0) + (c.challenging ?? 0)}</b>`,

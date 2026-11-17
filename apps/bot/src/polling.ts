@@ -11,6 +11,13 @@ export const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query', '
 
 /** Returns the matched keyword when a group message must be removed by risk control. */
 export type RiskCheck = (chatId: number, text: string) => string | undefined;
+/** Returns the matched name-ban keyword when a person's name (first, last, @username) is on the group's ban list. */
+export type NameCheck = (chatId: number, name: string) => string | undefined;
+type Named = { first_name?: string | undefined; last_name?: string | undefined; username?: string | undefined };
+/** Everything shown as a person's name: display name and @username. */
+function nameOf(u: Named): string {
+  return [u.first_name, u.last_name, u.username ? `@${u.username}` : undefined].filter(Boolean).join(' ');
+}
 
 type ScannedMessage = {
   text?: string | undefined;
@@ -18,11 +25,17 @@ type ScannedMessage = {
   entities?: { type: string; url?: string }[] | undefined;
   caption_entities?: { type: string; url?: string }[] | undefined;
   poll?: { question: string } | undefined;
+  quote?: { text: string } | undefined;
+  external_reply?: { poll?: { question: string } | undefined } | undefined;
 };
-/** Everything a reader sees in a message, including the targets of hidden text links. */
+/**
+ * Everything a reader sees in a message, including the targets of hidden text links and the
+ * quote block of a reply (also a quote taken from another chat, which spammers use to show text
+ * they did not type in this group).
+ */
 function scannedText(m: ScannedMessage): string {
   const links = [...(m.entities ?? []), ...(m.caption_entities ?? [])].flatMap((e) => (e.type === 'text_link' && e.url ? [e.url] : []));
-  return [m.text, m.caption, m.poll?.question, ...links].filter(Boolean).join('\n');
+  return [m.text, m.caption, m.poll?.question, m.quote?.text, m.external_reply?.poll?.question, ...links].filter(Boolean).join('\n');
 }
 
 type Loose = Record<string, unknown>;
@@ -39,14 +52,21 @@ const chat = (c: { id: number; type: string; title?: string | undefined }) => ({
  *
  * Group messages are checked against risk-control keywords here, in memory. A hit is stored only
  * as `_risk` (the keyword) with the message ID and sender; the message text itself is discarded.
+ * Names of people who join, ask to join or post in a group are checked against the name-ban list
+ * the same way: a hit is stored only as `_nameban` (the keyword); the name itself is discarded.
  */
-export function projectUpdate(u: Update, risk?: RiskCheck): Loose | null {
+export function projectUpdate(u: Update, risk?: RiskCheck, names?: NameCheck, awaitingKeywords?: (userId: number) => boolean): Loose | null {
   const base = { update_id: u.update_id };
+  const nameHit = (chatId: number, who: Named & { is_bot: boolean }): string | undefined =>
+    names && !who.is_bot ? names(chatId, nameOf(who)) : undefined;
   const riskHit = (m: NonNullable<Update['message']>): Loose | null => {
-    if (!risk || !m.from || m.from.is_bot || (m.chat.type !== 'group' && m.chat.type !== 'supergroup')) return null;
-    const keyword = risk(m.chat.id, scannedText(m));
+    if (!m.from || m.from.is_bot || (m.chat.type !== 'group' && m.chat.type !== 'supergroup')) return null;
+    const out = { message_id: m.message_id, date: m.date, chat: chat(m.chat), from: user(m.from) };
+    const banned = nameHit(m.chat.id, m.from);
+    if (banned !== undefined) return { ...base, message: { ...out, _nameban: banned } };
+    const keyword = risk?.(m.chat.id, scannedText(m));
     if (keyword === undefined) return null;
-    return { ...base, message: { message_id: m.message_id, date: m.date, chat: chat(m.chat), from: user(m.from), _risk: keyword } };
+    return { ...base, message: { ...out, _risk: keyword } };
   };
   if (u.edited_message) return riskHit(u.edited_message); // edits matter only when they add a keyword
   if (u.chat_join_request) {
@@ -59,6 +79,7 @@ export function projectUpdate(u: Update, risk?: RiskCheck): Loose | null {
         user_chat_id: r.user_chat_id,
         date: r.date,
         ...((r as { query_id?: string }).query_id ? { query_id: 'present' } : {}),
+        ...withNameBan(nameHit(r.chat.id, r.from)),
       },
     };
   }
@@ -93,6 +114,7 @@ export function projectUpdate(u: Update, risk?: RiskCheck): Loose | null {
         date: m.date,
         old_chat_member: member(m.old_chat_member),
         new_chat_member: member(m.new_chat_member),
+        ...(key === 'chat_member' ? withNameBan(nameHit(m.chat.id, m.new_chat_member.user)) : {}),
       },
     };
   }
@@ -117,10 +139,14 @@ export function projectUpdate(u: Update, risk?: RiskCheck): Loose | null {
       return { ...base, message: { ...out, text: m.text.slice(0, 256), entities: [command, ...(m.entities ?? []).filter(e => e.type === 'mention' || e.type === 'text_mention').map(e => e.type === 'text_mention' ? {...e,user:user(e.user)} : e)], ...reply } };
     }
     if (m.chat.type !== 'private') return null;
+    // An admin who tapped ➕ Add in a keyword panel is sending the keyword list: only then is plain text kept.
+    if (m.text !== undefined && awaitingKeywords?.(m.from.id)) return { ...base, message: { ...out, text: m.text.slice(0, 4000), _keywordInput: true } };
     return { ...base, message: { ...out, ...(m.text === undefined ? { _media: true } : {}) } };
   }
   return null;
 }
+
+const withNameBan = (keyword: string | undefined) => (keyword === undefined ? {} : { _nameban: keyword });
 
 export class Poller {
   lastPollAt = 0;
@@ -131,6 +157,8 @@ export class Poller {
     private readonly store: InboxRepository & UsernameDirectory,
     private readonly clock: Clock,
     private readonly risk?: RiskCheck,
+    private readonly names?: NameCheck,
+    private readonly awaitingKeywords?: (userId: number) => boolean,
   ) {
     this.inbox = new InboxProcessor(store, clock, update => bot.handleUpdate(update));
   }
@@ -182,7 +210,7 @@ export class Poller {
       }
     }
     this.store.storeBatchAndAdvance(
-      updates.map((u) => ({ update_id: u.update_id, payload: projectUpdate(u, this.risk) })),
+      updates.map((u) => ({ update_id: u.update_id, payload: projectUpdate(u, this.risk, this.names, this.awaitingKeywords) })),
       this.clock.now(),
     );
   }

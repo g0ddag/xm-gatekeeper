@@ -7,11 +7,15 @@ import type { Database } from 'bun:sqlite';
  * command access) so this feature needs no schema migration: releases stay same-schema and an
  * older release simply ignores these rows. List order is insertion order (rowid).
  */
+/** `message` keywords are matched against what a group message says; `name` keywords against who sent it. */
+export type KeywordListKind = 'message' | 'name';
+const PREFIX: Record<KeywordListKind, string> = { message: 'risk_keyword', name: 'name_keyword' };
+
 export class SqliteRiskKeywords {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: Database, private readonly kind: KeywordListKind = 'message') {}
 
   private prefix(chatId: number): string {
-    return `risk_keyword:${chatId}:`;
+    return `${PREFIX[this.kind]}:${chatId}:`;
   }
   list(chatId: number): string[] {
     const p = this.prefix(chatId);
@@ -31,7 +35,7 @@ export class SqliteRiskKeywords {
     return this.db.query('DELETE FROM runtime_state WHERE key=?').run(this.prefix(chatId) + keyword).changes > 0;
   }
   removeGroup(chatId: number): void {
-    for (const p of [this.prefix(chatId), `risk_strike:${chatId}:`]) {
+    for (const p of [this.prefix(chatId), ...(this.kind === 'message' ? [`risk_strike:${chatId}:`] : [])]) {
       this.db.query('DELETE FROM runtime_state WHERE substr(key,1,?)=?').run(p.length, p);
     }
   }

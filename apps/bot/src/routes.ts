@@ -26,8 +26,19 @@ export function registerRoutes(bot: Bot, s: Services): void {
   const { verification: v, admin } = s;
   const isPrivate = (ctx: Context) => ctx.chat?.type === 'private';
 
-  // Risk control first: intake marked this group message (or edit) as matching a keyword.
+  const nameBan = (x: object): string | undefined => {
+    const k = (x as { _nameban?: unknown })._nameban;
+    return typeof k === 'string' ? k : undefined;
+  };
+
+  // Risk control first: intake marked this group message (or edit) as matching a keyword, or its
+  // sender's name as matching the name-ban list.
   bot.on('message', async (ctx, next) => {
+    const banned = nameBan(ctx.message);
+    if (banned !== undefined && ctx.from) {
+      if (await s.risk?.onNameHit(ctx.chat.id, ctx.from.id, banned, { kind: 'message', messageId: ctx.message.message_id })) return;
+      return next();
+    }
     const keyword = (ctx.message as { _risk?: unknown })._risk;
     if (typeof keyword !== 'string') return next();
     if (ctx.from) await s.risk?.onHit(ctx.chat.id, ctx.from.id, ctx.message.message_id, keyword);
@@ -40,6 +51,8 @@ export function registerRoutes(bot: Bot, s: Services): void {
       log('warn', 'join_query_mode', { chat: req.chat.id });
       return;
     }
+    const banned = nameBan(req);
+    if (banned !== undefined && (await s.risk?.onNameHit(req.chat.id, req.from.id, banned, { kind: 'request' }))) return;
     await v.onJoin({
       updateId: ctx.update.update_id,
       chatId: req.chat.id,
@@ -54,6 +67,8 @@ export function registerRoutes(bot: Bot, s: Services): void {
     const wasIn = MEMBER.has(before.status) || (before.status === 'restricted' && before.is_member);
     const isIn = MEMBER.has(after.status) || (after.status === 'restricted' && after.is_member);
     if (!wasIn && isIn && !after.user.is_bot) {
+      const banned = nameBan(ctx.chatMember);
+      if (banned !== undefined && (await s.risk?.onNameHit(ctx.chat.id, after.user.id, banned, { kind: 'member' }))) return;
       // from === the member themself means they joined on their own (link, public group).
       const selfJoin = ctx.chatMember.from.id === after.user.id;
       await v.onMemberJoined(ctx.chat.id, after.user.id, selfJoin, ctx.update.update_id, ctx.chatMember.date * 1000);
@@ -140,6 +155,7 @@ export function registerRoutes(bot: Bot, s: Services): void {
   adminCommand('raid', (u, c, a) => admin.raid(u, c, a.toLowerCase()));
   adminCommand('settings', (u, c, a) => admin.settings(u, c, a));
   adminCommand('keywords', (u, c, a) => admin.keywords(u, c, a));
+  adminCommand('bannames', (u, c, a) => admin.banNames(u, c, a));
   adminCommand('audit', (u, c) => admin.audit(u, c));
   adminCommand('status', (u, c) => admin.status(u, c));
   adminCommand('group', (u, c) => admin.pickGroup(u, c));
@@ -201,6 +217,8 @@ export function registerRoutes(bot: Bot, s: Services): void {
   // ----- anything else in private chat -----
   bot.on('message', async (ctx) => {
     if (!isPrivate(ctx) || !ctx.from) return;
+    if ((ctx.message as { _keywordInput?: boolean })._keywordInput && ctx.message.text !== undefined &&
+      (await admin.keywordInput(ctx.from.id, ctx.chat.id, ctx.message.text))) return;
     if ((ctx.message as { _media?: boolean })._media) {
       await v.say(ctx.chat.id, t(v.localeFor(ctx.from.id), 'contact.unneeded'));
       return;

@@ -16,6 +16,7 @@ import { GrammyTg, telegramSignal } from './telegram';
 import { synchronizeMenus } from './menu-sync';
 import { Verification } from './verification';
 import { RiskControl } from './risk-control';
+import { pendingKeywordInput } from './admin/keywords';
 import { matchRiskKeyword } from '@guard/core';
 
 async function main(): Promise<void> {
@@ -48,8 +49,11 @@ async function main(): Promise<void> {
     const clock = systemClock;
     const startedAt = clock.now();
     const verification = new Verification({ store, tg, assets, boards: new PreparedBoardProvider(bank), config, clock, rng: secureRng });
-    // Group messages are checked in memory at intake; only a keyword hit is ever stored.
-    const poller = new Poller(bot, store, clock, (chatId, text) => matchRiskKeyword(text, store.activeRiskKeywords(chatId)));
+    // Group messages and names are checked in memory at intake; only a keyword hit is ever stored.
+    const poller = new Poller(bot, store, clock,
+      (chatId, text) => matchRiskKeyword(text, store.activeRiskKeywords(chatId)),
+      (chatId, name) => matchRiskKeyword(name, store.activeNameKeywords(chatId)),
+      (userId) => pendingKeywordInput(store, userId, clock.now()) !== undefined);
     const authority = new Authority(tg, store, clock);
     const risk = new RiskControl(store, tg, authority, clock, (chatId, text) => verification.notifyAdmins(chatId, text));
     const admin = new Admin(store, tg, authority, verification, clock, () => ({

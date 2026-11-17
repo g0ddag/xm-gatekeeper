@@ -36,3 +36,4 @@ export function acquireInstanceLock(databasePath: string): Database {
   }
   return lock;
 }
+export type { KeywordListKind } from './risk-keywords';

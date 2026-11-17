@@ -18,7 +18,7 @@ export type { InboxRow, OutboxRow } from './queue-repositories';
 import { SqliteRuntimeState } from './runtime-state';
 import { SqliteUsernameDirectory } from './username-directory';
 import { SqlitePhotoCache } from './photo-cache';
-import { SqliteRiskKeywords } from './risk-keywords';
+import { SqliteRiskKeywords, type KeywordListKind } from './risk-keywords';
 import type { GroupRow, UsernameDirectory, PhotoCacheRepository } from './repositories';
 export type { GroupRow } from './repositories';
 import type { Database } from 'bun:sqlite';
@@ -135,6 +135,7 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
     this.usernames = new SqliteUsernameDirectory(db, this.runtimeState);
     this.photoCache = new SqlitePhotoCache(db);
     this.riskKeywords = new SqliteRiskKeywords(db);
+    this.nameKeywords = new SqliteRiskKeywords(db, 'name');
   }
 
   private readonly groups: SqliteGroups;
@@ -151,35 +152,54 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
   private readonly usernames: SqliteUsernameDirectory;
   private readonly photoCache: SqlitePhotoCache;
   private readonly riskKeywords: SqliteRiskKeywords;
+  private readonly nameKeywords: SqliteRiskKeywords;
 
   // ---------- Risk-control keywords ----------
-  listRiskKeywords(chatId: number): string[] {
-    return this.riskKeywords.list(chatId);
+  private keywordList(kind: KeywordListKind): SqliteRiskKeywords {
+    return kind === 'name' ? this.nameKeywords : this.riskKeywords;
   }
-  countRiskKeywords(chatId: number): number {
-    return this.riskKeywords.count(chatId);
+  /** `message` list: what a group message says. `name` list: names that get a person banned on sight. */
+  listKeywords(kind: KeywordListKind, chatId: number): string[] {
+    return this.keywordList(kind).list(chatId);
   }
-  /** Adds normalised keywords up to the per-group cap. Returns those actually added. */
-  addRiskKeywords(chatId: number, keywords: string[], actor: number, now: number): { added: string[]; full: boolean } {
+  /** Adds normalised keywords up to the per-group cap (per list). Returns those actually added. */
+  addKeywords(kind: KeywordListKind, chatId: number, keywords: string[], actor: number, now: number): { added: string[]; full: boolean } {
+    const list = this.keywordList(kind);
+    const event = kind === 'name' ? 'name_keyword_added' : 'keyword_added';
     return this.tx(() => {
       const added: string[] = [];
       let full = false;
       for (const k of keywords) {
-        if (this.riskKeywords.count(chatId) >= RISK_KEYWORDS_PER_GROUP) { full = true; break; }
-        if (this.riskKeywords.add(chatId, k, actor, now)) {
+        if (list.count(chatId) >= RISK_KEYWORDS_PER_GROUP) { full = true; break; }
+        if (list.add(chatId, k, actor, now)) {
           added.push(k);
-          this.audit(chatId, actor, null, 'keyword_added', k, now);
+          this.audit(chatId, actor, null, event, k, now);
         }
       }
       return { added, full };
     });
   }
-  removeRiskKeyword(chatId: number, keyword: string, actor: number, now: number): boolean {
+  removeKeyword(kind: KeywordListKind, chatId: number, keyword: string, actor: number, now: number): boolean {
     return this.tx(() => {
-      const removed = this.riskKeywords.remove(chatId, keyword);
-      if (removed) this.audit(chatId, actor, null, 'keyword_removed', keyword, now);
+      const removed = this.keywordList(kind).remove(chatId, keyword);
+      if (removed) this.audit(chatId, actor, null, kind === 'name' ? 'name_keyword_removed' : 'keyword_removed', keyword, now);
       return removed;
     });
+  }
+  listRiskKeywords(chatId: number): string[] {
+    return this.listKeywords('message', chatId);
+  }
+  countRiskKeywords(chatId: number): number {
+    return this.riskKeywords.count(chatId);
+  }
+  countNameKeywords(chatId: number): number {
+    return this.nameKeywords.count(chatId);
+  }
+  addRiskKeywords(chatId: number, keywords: string[], actor: number, now: number): { added: string[]; full: boolean } {
+    return this.addKeywords('message', chatId, keywords, actor, now);
+  }
+  removeRiskKeyword(chatId: number, keyword: string, actor: number, now: number): boolean {
+    return this.removeKeyword('message', chatId, keyword, actor, now);
   }
   recordRiskStrike(chatId: number, userId: number, now: number): { count: number; counted: boolean } {
     return this.tx(() => this.riskKeywords.strike(chatId, userId, now, STRIKE_MEMORY_MS, STRIKE_GRACE_MS));
@@ -189,6 +209,13 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
   }
   /** Keywords to scan a group message against: empty unless the guard is on with risk control enabled. */
   activeRiskKeywords(chatId: number): string[] {
+    return this.activeKeywords('message', chatId);
+  }
+  /** Name-ban keywords to check a person's name against; same switch as message keywords. */
+  activeNameKeywords(chatId: number): string[] {
+    return this.activeKeywords('name', chatId);
+  }
+  private activeKeywords(kind: KeywordListKind, chatId: number): string[] {
     const group = this.getGroup(chatId);
     if (!group || !group.enabled) return [];
     let settings: GroupSettings;
@@ -197,9 +224,8 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
     } catch {
       return [];
     }
-    return settings.riskControl ? this.riskKeywords.list(chatId) : [];
+    return settings.riskControl ? this.keywordList(kind).list(chatId) : [];
   }
-
 
   scheduleReviewNotice(chatId: number, messageId: number, dueAt: number): void {
     this.setState(`review_notice:${chatId}:${messageId}`, JSON.stringify({chatId, messageId, dueAt}));
@@ -405,6 +431,7 @@ export class Store implements MessageCleanupRepository, ActionTokens, CapReposit
   removeGroup(chatId: number, actor: number, now: number): void {
     this.tx(() => {
       this.riskKeywords.removeGroup(chatId);
+      this.nameKeywords.removeGroup(chatId);
       this.groups.remove(chatId);
       this.run('DELETE FROM attempts WHERE chat_id=?', chatId);
       this.preferences.clearGroupContext(chatId);

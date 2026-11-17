@@ -4,7 +4,7 @@
   "workspaces": {
     "": {
       "name": "xm-gatekeeper",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@cap.js/wasm": "0.0.8",
         "@guard/assets": "workspace:*",
@@ -27,7 +27,7 @@
     },
     "apps/bot": {
       "name": "@guard/bot",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@guard/assets": "workspace:*",
         "@guard/captcha": "workspace:*",
@@ -40,14 +40,14 @@
     },
     "packages/assets": {
       "name": "@guard/assets",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@guard/core": "workspace:*",
       },
     },
     "packages/captcha": {
       "name": "@guard/captcha",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@guard/core": "workspace:*",
         "sharp": "0.35.5",
@@ -55,18 +55,18 @@
     },
     "packages/core": {
       "name": "@guard/core",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
     },
     "packages/database": {
       "name": "@guard/database",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@guard/core": "workspace:*",
       },
     },
     "packages/i18n": {
       "name": "@guard/i18n",
-      "version": "0.1.0-alpha.2",
+      "version": "0.1.0-alpha.3",
       "dependencies": {
         "@guard/core": "workspace:*",
       },

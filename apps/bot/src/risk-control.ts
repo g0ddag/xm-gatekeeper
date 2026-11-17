@@ -7,6 +7,11 @@ import { classify, type Tg } from './telegram';
 /** How long the "removed by risk control" notice stays in the group before the bot deletes it. */
 export const RISK_NOTICE_TTL_MS = 60_000;
 const RIGHTS_ALERT_INTERVAL_MS = 3_600_000;
+/** A join, its service message and a first post arrive together; act once per person in this window. */
+const NAME_BAN_DEDUPE_MS = 10 * 60_000;
+
+/** Where a name-ban hit came from: a join request, a member who just joined, or a group message. */
+export type NameHit = { kind: 'request' } | { kind: 'member' } | { kind: 'message'; messageId: number };
 
 type RiskStore = Pick<Store, 'getGroup' | 'settingsOf' | 'audit' | 'scheduleReviewNotice' | 'getState' | 'setState' | 'recordRiskStrike'>;
 
@@ -18,9 +23,12 @@ type RiskStore = Pick<Store, 'getGroup' | 'settingsOf' | 'audit' | 'scheduleRevi
  * was never stored; only the keyword that matched is known here.
  */
 export class RiskControl {
+  /** chat:user → when the bot last banned them by name (in memory; a repeat ban after restart is harmless). */
+  private readonly recentNameBans = new Map<string, number>();
+
   constructor(
     private readonly store: RiskStore,
-    private readonly tg: Pick<Tg, 'deleteMessage' | 'sendGroupPrompt' | 'mute' | 'ban'>,
+    private readonly tg: Pick<Tg, 'deleteMessage' | 'sendGroupPrompt' | 'mute' | 'ban' | 'decline'>,
     private readonly authority: Pick<Authority, 'admins'>,
     private readonly clock: Clock,
     private readonly notifyAdmins: (chatId: number, text: string) => Promise<void>,
@@ -82,6 +90,47 @@ export class RiskControl {
     } catch (e) {
       log('warn', 'risk_notice_failed', { kind: classify(e).kind });
     }
+  }
+
+  /**
+   * Someone whose name contains one of the group's name-ban keywords asked to join, joined or
+   * posted. They are banned at once (no strikes, no group notice — a notice would repeat the
+   * spam name). A join request is declined first; a message is deleted. Returns false when the
+   * bot did not ban (risk control off, an administrator, or no "Ban users" right), so the caller
+   * continues with the normal flow.
+   */
+  async onNameHit(chatId: number, userId: number, keyword: string, hit: NameHit): Promise<boolean> {
+    const group = this.store.getGroup(chatId);
+    if (!group || !group.enabled) return false;
+    const settings = this.store.settingsOf(group);
+    if (!settings.riskControl) return false;
+    const admins = await this.authority.admins(chatId, false).catch(() => undefined);
+    if (admins?.some((a) => a.userId === userId)) return false;
+
+    const now = this.clock.now();
+    const label = settings.label || String(chatId);
+    const dedupeKey = `${chatId}:${userId}`;
+    for (const [k, at] of this.recentNameBans) if (now - at >= NAME_BAN_DEDUPE_MS) this.recentNameBans.delete(k);
+    const recent = this.recentNameBans.has(dedupeKey);
+    if (!recent) {
+      if (hit.kind === 'request') await this.tg.decline(chatId, userId).catch(() => undefined); // may already be handled
+      try {
+        await this.tg.ban(chatId, userId);
+      } catch (e) {
+        const err = classify(e);
+        log('warn', 'name_ban_failed', { kind: err.kind, error: errorCode(e) });
+        if (err.kind === 'forbidden' || /not enough rights/i.test(err.message)) {
+          await this.alertMissing(chatId, label, now, 'nonamebanright', `⚠️ ${label}: someone whose name is on the /bannames list joined or posted, but I could not ban them. Give me the "Ban users" admin right.`);
+        }
+        if (hit.kind === 'message') await this.tg.deleteMessage(chatId, hit.messageId).catch(() => undefined);
+        return false;
+      }
+      this.recentNameBans.set(dedupeKey, now);
+      this.store.audit(chatId, null, userId, 'name_banned', keyword, now);
+      log('info', 'name_banned', { chat: chatId, via: hit.kind });
+    }
+    if (hit.kind === 'message') await this.tg.deleteMessage(chatId, hit.messageId).catch(() => undefined);
+    return true;
   }
 
   private alertMissingRight(chatId: number, label: string, now: number): Promise<void> {

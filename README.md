@@ -12,7 +12,7 @@ XM Gatekeeper runs as a single Bun process backed by SQLite: no Redis, PostgreSQ
 external CAPTCHA service is required.
 
 > [!WARNING]
-> **Alpha release (v0.1.0-alpha.2).** Interfaces, configuration and the database
+> **Alpha release (v0.1.0-alpha.3).** Interfaces, configuration and the database
 > schema may change before 1.0. Evaluate the bot with a dedicated test bot and group
 > before deploying it to a live community.
 
@@ -301,6 +301,7 @@ Send administrator commands to the bot in a private chat. `/ban`, `/mute` and
 | `/review`   | Review pending and failed verifications.               |
 | `/settings` | Change verification settings.                          |
 | `/keywords` | Manage risk-control keywords and switch risk control.   |
+| `/bannames` | Manage the name ban list (ban on sight by name).        |
 | `/raid`     | `on` or `off`. In raid mode, new requests go to review. |
 | `/audit`    | Show recent administrative and verification events.    |
 | `/ban`      | Ban a user.                                            |
@@ -318,12 +319,16 @@ search.
 ## Risk control
 
 Administrators keep a keyword list per group with `/keywords` in a private chat:
-`/keywords add word1, word2` (commas, `、`, `;` or new lines separate keywords; up to
-200 per group, 64 characters each) and `/keywords remove word`, or tap a keyword in
-the panel to remove it. The panel also switches risk control on or off; it is on by
+tap **➕ Add keywords** and send the keywords as one ordinary message (commas, `、`,
+`;` or new lines separate keywords; up to 200 per group, 64 characters each), and tap
+a keyword in the panel to remove it. The bot keeps the text of that one message only;
+the wait ends after 10 minutes or with ✖️ Cancel, and other plain private messages are
+still discarded. `/keywords add word1, word2` and `/keywords remove word` do the same
+by command. The panel also switches risk control on or off; it is on by
 default but does nothing until a keyword is added.
 
-When a member's message, caption, poll question, hidden link target or edit contains
+When a member's message, caption, poll question, hidden link target, quoted text (the
+quote block of a reply, including a quote taken from another chat) or edit contains
 a keyword, the bot deletes it and escalates per person and group:
 
 | Strike | Action                                    |
@@ -344,6 +349,25 @@ phrases. Messages are checked in memory as they arrive; only a hit (message ID,
 sender and keyword) is stored. Existing messages are not rescanned, and posts sent
 as a channel are not checked. Without **Delete messages** or **Ban users**,
 administrators receive one warning per hour.
+
+### Name ban list
+
+`/bannames` keeps a second keyword list per group, separate from `/keywords`, with the
+same commands, buttons, matching rules and limits. Anyone whose first name, last name
+or `@username` contains one of these keywords is banned at once, without strikes:
+
+- a join request is declined and the person banned;
+- a person who joins (invite link, public group or added) is banned before any
+  verification starts;
+- a member who posts or edits a message is banned and the message deleted. This also
+  covers names changed after joining and members who joined before the keyword was
+  added; the "joined the group" service message is deleted the same way.
+
+No notice is posted in the group, because it would repeat the name. Each ban appears
+in `/audit` with the keyword; `/unban` lifts it. The list follows the risk-control
+switch, exempts group administrators and needs **Ban users**; without that right the
+normal verification flow continues and administrators receive one warning per hour.
+Names are checked in memory as updates arrive and are never stored.
 
 ## Project structure
 
