@@ -22,7 +22,7 @@ for (const d of defs) {
     articleUrl: '', filePageUrl: '', originalSourceUrl: `assets/source/${d.id}.svg`,
     creator: 'XM Gatekeeper contributors', rightsHolder: 'XM Gatekeeper contributors',
     licenceName: 'MIT', licenceUrl: 'https://opensource.org/license/mit',
-    attributionText: 'Copyright (c) 2026 haruseed', permissionEvidencePath: '../LICENSE',
+    attributionText: 'Copyright (c) 2026 g0ddag', permissionEvidencePath: '../LICENSE',
     modifications: ['rasterised to 256×256 PNG', 'preprocessed and composited into challenge boards'],
     reviewedBy: 'XM Gatekeeper contributors', reviewedAt: '2026-11-13', approval: 'approved',
     sha256: sha256Hex(new Uint8Array(png)), localRelativePath: rel,
